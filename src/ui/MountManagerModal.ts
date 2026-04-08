@@ -777,8 +777,8 @@ export class MountManagerModal extends Modal {
 			.addText(text => {
 				fallbackPathText = text;
 				text.inputEl.addClass('folderbridge-input-flex');
-				text.inputEl.style.minWidth = '200px';
-				text.setPlaceholder('/home/yourname/Documents/Work  or  C:\\Users\\You\\Documents\\Work')
+				text.inputEl.addClass('folderbridge-input-min-200');
+				text.setPlaceholder('Enter a fallback folder path for this device')
 					.setValue(this.fallbackRealPath)
 					.onChange(val => { this.fallbackRealPath = val.trim(); });
 			})

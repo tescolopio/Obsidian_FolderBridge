@@ -77,6 +77,13 @@ describe('SecurityManager', () => {
 			expect(sec.validateMount(mkMount('Work', 'relative/path'), [])).toMatch(/absolute/i);
 		});
 
+		it('rejects a non-absolute fallback path', () => {
+			expect(sec.validateMount({
+				...mkMount('Work', '/home/user/Work'),
+				fallbackRealPath: 'relative/fallback',
+			}, [])).toMatch(/fallback path must be an absolute/i);
+		});
+
 		it('blocks the POSIX system root /', () => {
 			expect(sec.validateMount(mkMount('Root', '/'), [])).toMatch(/protected/i);
 		});
@@ -87,6 +94,13 @@ describe('SecurityManager', () => {
 
 		it('blocks /etc subdirectories', () => {
 			expect(sec.validateMount(mkMount('Ssl', '/etc/ssl'), [])).toMatch(/protected/i);
+		});
+
+		it('blocks dangerous fallback paths like /etc', () => {
+			expect(sec.validateMount({
+				...mkMount('Work', '/home/user/Work'),
+				fallbackRealPath: '/etc',
+			}, [])).toMatch(/protected system path/i);
 		});
 
 		it('rejects a duplicate virtual path', () => {

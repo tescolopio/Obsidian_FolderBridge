@@ -1161,7 +1161,7 @@ export default class FolderBridgePlugin extends Plugin {
 				const orig = (target as unknown as { orig?(): DataAdapter }).orig?.();
 				return orig ? Object.getPrototypeOf(orig) : Object.getPrototypeOf(target);
 			},
-		}) as DataAdapter;
+		}) as unknown as DataAdapter;
 
 		// Obsidian's renderer calls Vault.getResourcePath(TFile) directly — it does NOT
 		// go through the adapter. We must also patch the vault-level method so that
@@ -1575,9 +1575,10 @@ export default class FolderBridgePlugin extends Plugin {
 			const wasEnabled = oldMount.enabled;
 			const virtualPathChanged = normalizePath(oldMount.virtualPath) !== normalizePath(newData.virtualPath);
 			const realPathChanged = oldMount.realPath !== newData.realPath;
+			const fallbackChanged = (oldMount.fallbackRealPath ?? '') !== (newData.fallbackRealPath ?? '');
 			const visibleFileFilterChanged = oldMount.visibleFileFilter !== newData.visibleFileFilter;
 
-			if (wasEnabled && (virtualPathChanged || realPathChanged || visibleFileFilterChanged)) {
+			if (wasEnabled && (virtualPathChanged || realPathChanged || visibleFileFilterChanged || fallbackChanged)) {
 				await this.notifyVaultMountRemoved(oldMount);
 			}
 
@@ -1589,7 +1590,7 @@ export default class FolderBridgePlugin extends Plugin {
 			};
 
 			if (!await this.writeManagedTocMounts(nextManagedMounts)) {
-				if (wasEnabled && (virtualPathChanged || realPathChanged || visibleFileFilterChanged)) {
+				if (wasEnabled && (virtualPathChanged || realPathChanged || visibleFileFilterChanged || fallbackChanged)) {
 					await this.notifyVaultMountAdded(oldMount);
 				}
 				return;
@@ -1602,7 +1603,7 @@ export default class FolderBridgePlugin extends Plugin {
 			const updatedMount = this.settings.mountPoints.find(existing => existing.id === id);
 			if (!updatedMount) return;
 
-			if (wasEnabled && (virtualPathChanged || realPathChanged || visibleFileFilterChanged)) {
+			if (wasEnabled && (virtualPathChanged || realPathChanged || visibleFileFilterChanged || fallbackChanged)) {
 				await this.notifyVaultMountAdded(updatedMount);
 			}
 
@@ -1613,7 +1614,7 @@ export default class FolderBridgePlugin extends Plugin {
 				oldMount.watcherDebounceMs !== updatedMount.watcherDebounceMs ||
 				oldMount.watcherUsePolling !== updatedMount.watcherUsePolling ||
 				oldMount.watcherPollingIntervalMs !== updatedMount.watcherPollingIntervalMs;
-			if ((realPathChanged || watcherSettingsChanged) && wasEnabled) {
+			if ((realPathChanged || fallbackChanged || watcherSettingsChanged) && wasEnabled) {
 				this.fileWatcher?.stopWatching(oldMount);
 				this.fileWatcher?.startWatching(updatedMount);
 			}
@@ -2347,11 +2348,11 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 					})();
 
 					new Setting(containerEl)
-							.setName(`Support ${pluginName}`)
+						.setName(`Support ${pluginName}`)
 						.setDesc('Follow ongoing work, browse other projects, or star the repository on GitHub.')
 						.addButton(btn => btn
 							.setButtonText('GitHub repo')
-								.setTooltip(`Open the ${pluginName} repository`)
+							.setTooltip(`Open the ${pluginName} repository`)
 							.onClick(() => openExternalUrl(GITHUB_REPO_URL)))
 						.addButton(btn => btn
 							.setButtonText('More projects')
@@ -2584,12 +2585,12 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 				text: 'Fallback TOC path: ',
 				cls: 'setting-item-description',
 			});
-			fallbackLabel.style.whiteSpace = 'nowrap';
+			fallbackLabel.addClass('folderbridge-nowrap');
 			const fallbackInput = fallbackRow.createEl('input', {
 				type: 'text',
 				placeholder: 'Alternative path for this platform (e.g. /home/me/folderbridge.managed.json)',
 			});
-			fallbackInput.style.flex = '1';
+			fallbackInput.addClass('folderbridge-flex-fill');
 			fallbackInput.value = this.plugin.settings.managedTocSourceFallback ?? '';
 			const fallbackBrowseBtn = fallbackRow.createEl('button', { text: 'Browse…' });
 			fallbackBrowseBtn.onclick = () => {
@@ -2971,8 +2972,8 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 
 		const addOverridePathButton = (): void => {
 			setting.addButton(btn => btn
-				.setButtonText('Set path for this device')
-				.setTooltip('Set the real folder path for this mount on this device (e.g. after moving from Windows to Linux)')
+				.setButtonText('Use path on this device')
+				.setTooltip('Use the real folder path for this mount on this device.')
 				.onClick(() => {
 					void (async () => {
 						const newPath = await browseFolderOnDisk('Select real folder for this device');
