@@ -1064,7 +1064,7 @@ export default class FolderBridgePlugin extends Plugin {
 				// eslint-disable-next-line @typescript-eslint/no-unsafe-return
 				return orig ? Object.getPrototypeOf(orig) : Object.getPrototypeOf(target);
 			},
-		}) as DataAdapter;
+		}) as unknown as DataAdapter;
 
 		// Obsidian's renderer calls Vault.getResourcePath(TFile) directly — it does NOT
 		// go through the adapter. We must also patch the vault-level method so that
@@ -2637,9 +2637,12 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 							try {
 								const text = await file.text();
 								const parsed = JSON.parse(text) as unknown;
-								const mounts: MountPoint[] = Array.isArray(parsed)
-									? (parsed as MountPoint[])                        // legacy bare array
-									: (parsed as Record<string, unknown>).mountPoints ?? [];    // { version, mountPoints }
+								const rawMounts: unknown = Array.isArray(parsed)
+									? parsed // legacy bare array
+									: (parsed as Record<string, unknown>).mountPoints; // { version, mountPoints }
+								const mounts: MountPoint[] = Array.isArray(rawMounts)
+									? (rawMounts as MountPoint[])
+									: [];
 								if (!Array.isArray(mounts) || mounts.length === 0) {
 									new Notice(`${this.plugin.manifest.name}: no mount points found in the selected file.`);
 									return;
