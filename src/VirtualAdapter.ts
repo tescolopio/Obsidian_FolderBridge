@@ -756,6 +756,26 @@ export class VirtualAdapter {
 		return this.orig().append(normalizedPath, data, options as DataWriteOptions | undefined);
 	}
 
+	async appendBinary(normalizedPath: string, data: ArrayBuffer, options?: unknown): Promise<void> {
+		const mount = this.pathMapper.getMountForPath(normalizedPath);
+		if (mount) {
+			if (mount.readOnly) { this.warnReadOnly(mount); return; }
+			if (this.isPathIgnored(normalizedPath, mount)) throw new Error(`Folder Bridge: Cannot append to ignored path "${normalizedPath}"`);
+			this.assertVisibleMountFile(normalizedPath, mount);
+			const realPath = this.toReal(normalizedPath, mount);
+			this.assertAllowed(realPath);
+			if (this.dryRun) { logger.debug(`[FolderBridge DryRun] appendBinary → ${realPath}`); return; }
+			try {
+				await fs.promises.appendFile(realPath, Buffer.from(data));
+				void this.onModify?.(normalizedPath).catch(() => { });
+			} catch (e) {
+				throw new Error(`Folder Bridge: ${translateFsError(e as NodeJS.ErrnoException, 'appendBinary')}`);
+			}
+			return;
+		}
+		return this.orig().appendBinary(normalizedPath, data, options as DataWriteOptions | undefined);
+	}
+
 	async process(
 		normalizedPath: string,
 		fn: (data: string) => string,
