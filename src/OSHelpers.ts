@@ -312,6 +312,15 @@ export function tryReadAsDataUri(realPath: string, maxBytes = MAX_SYNC_DATA_URI_
  */
 export function normalizeForComparison(p: string): string {
 	let n = path.normalize(p);
+	// path.normalize preserves trailing separators.  Strip them so that
+	// prefix comparisons in SecurityManager.isAllowed() don't produce a
+	// double-separator (e.g. "C:\path\" + "\" → "C:\path\\") that never
+	// matches child paths.  Preserve the separator for filesystem roots
+	// like "C:\" or "/" where it is semantically significant.
+	const root = path.parse(n).root;
+	if (n !== root && (n.endsWith('/') || n.endsWith('\\'))) {
+		n = n.slice(0, -1);
+	}
 	if (getPlatform() !== 'windows' && path.sep === '\\') {
 		n = n.replace(/\\/g, '/');
 	}
