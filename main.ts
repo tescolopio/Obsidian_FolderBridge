@@ -435,7 +435,7 @@ export default class FolderBridgePlugin extends Plugin {
 		this.pathMapper.update(this.settings.mountPoints, this.settings.deviceId);
 
 		// [FEATURE_20260222] Initialize FileWatcher
-		this.fileWatcher = new FileWatcher(this.app, this.pathMapper, (name, mount) => this.isNameIgnored(name, mount));
+		this.fileWatcher = new FileWatcher(this.app, this.pathMapper, (name, mount, mountRelativePath) => this.isNameIgnored(name, mount, mountRelativePath));
 
 		// Install the virtual adapter shim
 		this.installVirtualAdapter();
