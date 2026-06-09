@@ -65,7 +65,7 @@ export class SecurityManager {
 			if (!mount.realPath || !mount.realPath.trim()) {
 				return 'Real path cannot be empty.';
 			}
-			if (!path.isAbsolute(mount.realPath)) {
+			if (!path.posix.isAbsolute(mount.realPath) && !path.win32.isAbsolute(mount.realPath)) {
 				return 'Real path must be an absolute filesystem path.';
 			}
 

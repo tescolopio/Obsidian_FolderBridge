@@ -57,6 +57,7 @@ export function serializeMountToTocEntry(mount: MountPoint): TocFileMount {
         deviceId: mount.deviceId,
         virtualPath: normalizeVirtualPath(mount.virtualPath),
         realPath: mount.realPath,
+        fallbackRealPath: mount.fallbackRealPath,
         label: mount.label,
         enabled: mount.enabled,
         readOnly: mount.readOnly,
@@ -142,6 +143,9 @@ export function parseTocConfig(text: string, sourcePath: string, deviceId: strin
                 : buildTocMountId(sourcePath, mount, index),
             virtualPath,
             realPath,
+            fallbackRealPath: typeof mount.fallbackRealPath === 'string' && mount.fallbackRealPath.trim()
+                ? mount.fallbackRealPath.trim()
+                : undefined,
             enabled: mount.enabled ?? true,
             readOnly: mount.readOnly ?? false,
             label: typeof mount.label === 'string' && mount.label.trim() ? mount.label.trim() : undefined,

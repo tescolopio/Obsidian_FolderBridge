@@ -1,7 +1,7 @@
 // Type-only import — no runtime require, so chokidar's Node.js dependencies are
 // never evaluated at bundle-load time on Obsidian Mobile.
 import type * as Chokidar from 'chokidar';
-import { App, normalizePath, Notice, Platform } from 'obsidian';
+import { App, normalizePath, Platform } from 'obsidian';
 import { MountPoint } from './types';
 import { PathMapper } from './PathMapper';
 import { logger } from './logger';
@@ -66,9 +66,6 @@ export class FileWatcher {
         logger.warn(`[FolderBridge] File watcher unavailable for mount ${mount.virtualPath}:`, error);
         if (this.watcherBackendWarningShown) return;
         this.watcherBackendWarningShown = true;
-        if (typeof Notice === 'function') {
-            new Notice('External file watching is unavailable in this environment. Mounts still work, but filesystem changes made outside Obsidian will not live-sync until the watcher backend is available.');
-        }
     }
 
     // ── Suppression API ────────────────────────────────────────────────────
