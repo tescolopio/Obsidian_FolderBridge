@@ -1064,7 +1064,7 @@ export default class FolderBridgePlugin extends Plugin {
 				// eslint-disable-next-line @typescript-eslint/no-unsafe-return
 				return orig ? Object.getPrototypeOf(orig) : Object.getPrototypeOf(target);
 			},
-		}) as DataAdapter;
+		}) as unknown as DataAdapter;
 
 		// Obsidian's renderer calls Vault.getResourcePath(TFile) directly — it does NOT
 		// go through the adapter. We must also patch the vault-level method so that
@@ -2221,11 +2221,11 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 					})();
 
 					new Setting(containerEl)
-							.setName(`Support ${pluginName}`)
+						.setName(`Support ${pluginName}`)
 						.setDesc('Follow ongoing work, browse other projects, or star the repository on GitHub.')
 						.addButton(btn => btn
 							.setButtonText(`GitHub ${ghRepo}`)
-								.setTooltip(`Open the ${pluginName} repository`)
+							.setTooltip(`Open the ${pluginName} repository`)
 							.onClick(() => openExternalUrl(GITHUB_REPO_URL)))
 						.addButton(btn => btn
 							.setButtonText(`More ${moreProj}`)
@@ -2639,7 +2639,7 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 								const parsed = JSON.parse(text) as unknown;
 								const mounts: MountPoint[] = Array.isArray(parsed)
 									? (parsed as MountPoint[])                        // legacy bare array
-									: (parsed as Record<string, unknown>).mountPoints ?? [];    // { version, mountPoints }
+									: ((parsed as Record<string, unknown>).mountPoints ?? []) as MountPoint[];    // { version, mountPoints }
 								if (!Array.isArray(mounts) || mounts.length === 0) {
 									new Notice(`${this.plugin.manifest.name}: no mount points found in the selected file.`);
 									return;

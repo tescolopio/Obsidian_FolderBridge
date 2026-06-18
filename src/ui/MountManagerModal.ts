@@ -35,10 +35,10 @@ export async function browseFolderOnDisk(title = 'Select folder', defaultPath?: 
 		const runtimeRequire = getRuntimeRequire();
 		// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
 		const electron = runtimeRequire?.('electron');
+		const remote = (electron as Record<string, unknown>)?.remote as Record<string, unknown> | undefined;
 		// Electron ≥ 14 ships remote via @electron/remote; Obsidian re-exports
 		// it on the electron object so both old and new versions work here.
-		// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-		const dialog: ElectronDialog | undefined = (electron as Record<string, unknown>)?.remote?.dialog ?? (electron as Record<string, unknown>)?.dialog;
+		const dialog: ElectronDialog | undefined = remote?.dialog as ElectronDialog | undefined ?? (electron as Record<string, unknown>)?.dialog as ElectronDialog | undefined;
 		if (!dialog?.showOpenDialog) {
 			new Notice('Native folder browser is unavailable. Please type the path manually.');
 			return null;
@@ -70,8 +70,8 @@ export async function browseMultipleFoldersOnDisk(title = 'Select folders', defa
 		const runtimeRequire = getRuntimeRequire();
 		// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
 		const electron = runtimeRequire?.('electron');
-		// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-		const dialog: ElectronDialog | undefined = (electron as Record<string, unknown>)?.remote?.dialog ?? (electron as Record<string, unknown>)?.dialog;
+		const remote = (electron as Record<string, unknown>)?.remote as Record<string, unknown> | undefined;
+		const dialog: ElectronDialog | undefined = remote?.dialog as ElectronDialog | undefined ?? (electron as Record<string, unknown>)?.dialog as ElectronDialog | undefined;
 		if (!dialog?.showOpenDialog) {
 			new Notice('Native folder browser is unavailable. Please type the path manually.');
 			return null;
