@@ -183,6 +183,7 @@ export class MountManagerModal extends Modal {
 	private mountType: MountType = 'local';
 	private virtualPath = '';
 	private realPath = '';
+	private fallbackRealPath = '';
 	private readOnly = false;
 	private label = '';
 	private useFolderNameAsLabel = false;
@@ -237,6 +238,7 @@ export class MountManagerModal extends Modal {
 			this.mountType = editMount.mountType ?? 'local';
 			this.virtualPath = editMount.virtualPath;
 			this.realPath = editMount.realPath;
+			this.fallbackRealPath = editMount.fallbackRealPath ?? '';
 			this.readOnly = editMount.readOnly;
 			this.label = editMount.label ?? '';
 			// WebDAV
@@ -764,6 +766,42 @@ export class MountManagerModal extends Modal {
 			});
 		}
 
+		// ── Fallback path ──────────────────────────────────────────────────
+		// Only meaningful for local/vault mounts; cloud adapters resolve their own paths.
+		let fallbackPathText: import('obsidian').TextComponent | null = null;
+		new Setting(localSection)
+			.setName('Fallback path (optional)')
+			.setDesc(
+				'Alternative folder tried automatically if the real path above is not ' +
+				'accessible on this machine. Useful for cross-platform vaults: set ' +
+				'the Windows path above and the Linux/macOS path here (or vice-versa). ' +
+				'A mount with a fallback configured activates on any device without ' +
+				'extra per-device setup.'
+			)
+			.addText(text => {
+				fallbackPathText = text;
+				text.inputEl.addClass('folderbridge-input-flex');
+				text.inputEl.addClass('folderbridge-input-min200');
+				// eslint-disable-next-line obsidianmd/ui/sentence-case
+				text.setPlaceholder(`/home/yourname/Documents/Work  or  C:\\Users\\You\\Documents\\Work`)
+					.setValue(this.fallbackRealPath)
+					.onChange(val => { this.fallbackRealPath = val.trim(); });
+			})
+			.addButton(btn => {
+				btn.setButtonText('Browse…')
+					.setTooltip('Open the system folder picker')
+					.onClick(() => {
+						void (async () => {
+							const selected = await browseFolderOnDisk('Select fallback folder');
+							if (selected) {
+								this.fallbackRealPath = selected;
+								fallbackPathText?.setValue(selected);
+							}
+						})();
+					});
+				btn.buttonEl.setAttribute('aria-label', 'Browse for fallback folder on disk');
+			});
+
 		// ── Virtual path ───────────────────────────────────────────────────
 		new Setting(contentEl)
 			.setName('Virtual path (in vault)')
@@ -1210,13 +1248,6 @@ export class MountManagerModal extends Modal {
 			new Notice(`${this.pluginName}: Real path is required.`);
 			return;
 		}
-		if (!path.isAbsolute(this.realPath)) {
-			this.submitState.finish();
-			this.syncSubmitButtons();
-			new Notice(`${this.pluginName}: Real path must be an absolute filesystem path.`);
-			return;
-		}
-
 		const normalizedVirtual = normalizePath(virtualPathToUse);
 
 		// Validate via SecurityManager (dangerous paths, duplicate mounts, etc.)
@@ -1237,9 +1268,20 @@ export class MountManagerModal extends Modal {
 			return;
 		}
 
-		// Only re-check accessibility when the real path has changed (or this is a new mount)
+		// Only re-check absoluteness and accessibility when the real path has changed (or this is a new mount).
+		// Skipping these checks on unchanged paths allows cross-platform editing — e.g. a Windows path saved
+		// on Windows can be edited on Linux to add a fallback without failing path.isAbsolute() on Linux.
 		const realPathChanged = !this.editMount || this.editMount.realPath !== this.realPath;
 		if (realPathChanged) {
+			// Accept paths that are absolute on either platform (e.g. /home/... on Linux, C:\... on Windows)
+			const isAbsolute = path.posix.isAbsolute(this.realPath) || path.win32.isAbsolute(this.realPath);
+			if (!isAbsolute) {
+				this.submitState.finish();
+				this.syncSubmitButtons();
+				new Notice(`${this.pluginName}: Real path must be an absolute filesystem path.`);
+				return;
+			}
+
 			const dirExists = await isDirectory(this.realPath);
 			if (!dirExists) {
 				this.submitState.finish();
@@ -1267,6 +1309,7 @@ export class MountManagerModal extends Modal {
 			{
 				virtualPath: normalizedVirtual,
 				realPath: this.realPath,
+				fallbackRealPath: this.fallbackRealPath || undefined,
 				enabled: this.editMount ? this.editMount.enabled : true,
 				readOnly: this.readOnly,
 				label: this.label || undefined,

@@ -28,6 +28,14 @@ export class PathMapper {
 		normalizedVirtualPath: string;
 	}> = [];
 
+	/**
+	 * Runtime-resolved real paths, keyed by mount ID.
+	 * Populated once at mount activation when fallbackRealPath is used
+	 * (primary path inaccessible, fallback accessible).
+	 * Never written to data.json — reset on each session.
+	 */
+	private resolvedRealPaths: Map<string, string> = new Map();
+
 	/** Replace the active mount list (call after settings change). */
 	update(mounts: MountPoint[], deviceId: string = ''): void {
 		this.currentDeviceId = deviceId;
@@ -38,6 +46,24 @@ export class PathMapper {
 		this.sortedMountCache = this.mounts
 			.map(m => ({ mount: m, normalizedVirtualPath: normalizePath(m.virtualPath) }))
 			.sort((a, b) => b.normalizedVirtualPath.length - a.normalizedVirtualPath.length);
+		// Remove runtime-resolved paths for mounts no longer active
+		const activeIds = new Set(this.mounts.map(m => m.id));
+		for (const id of this.resolvedRealPaths.keys()) {
+			if (!activeIds.has(id)) this.resolvedRealPaths.delete(id);
+		}
+	}
+
+	/**
+	 * Store a runtime-resolved real path for a mount (used when the fallback
+	 * path was selected at activation time because the primary was inaccessible).
+	 */
+	setResolvedPath(mountId: string, resolvedPath: string): void {
+		this.resolvedRealPaths.set(mountId, resolvedPath);
+	}
+
+	/** Clear a previously stored runtime-resolved path (primary is accessible again). */
+	clearResolvedPath(mountId: string): void {
+		this.resolvedRealPaths.delete(mountId);
 	}
 
 	getMounts(): MountPoint[] {
@@ -45,12 +71,18 @@ export class PathMapper {
 	}
 
 	/**
-	 * Gets the effective real path for a mount on this specific device,
-	 * falling back to the original realPath if no override exists.
+	 * Gets the effective real path for a mount on this specific device.
+	 * Priority:
+	 *   1. Explicit per-device override (deviceOverrides[currentDeviceId])
+	 *   2. Runtime-resolved fallback (set at activation when primary was inaccessible)
+	 *   3. Primary realPath
 	 */
 	getEffectiveRealPath(mount: MountPoint): string {
-		if (this.currentDeviceId && mount.deviceOverrides && mount.deviceOverrides[this.currentDeviceId]) {
+		if (this.currentDeviceId && mount.deviceOverrides?.[this.currentDeviceId]) {
 			return mount.deviceOverrides[this.currentDeviceId];
+		}
+		if (this.resolvedRealPaths.has(mount.id)) {
+			return this.resolvedRealPaths.get(mount.id)!;
 		}
 		return mount.realPath;
 	}

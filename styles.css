@@ -163,6 +163,14 @@
     width: 100%;
 }
 
+.folderbridge-label-nowrap {
+    white-space: nowrap;
+}
+
+.folderbridge-input-min200 {
+    min-width: 200px;
+}
+
 .folderbridge-input-narrow {
     width: 80px !important;
 }
