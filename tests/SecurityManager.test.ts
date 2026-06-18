@@ -40,6 +40,16 @@ describe('SecurityManager', () => {
 			// /allowed/pathmore should NOT be allowed when /allowed/path is in list
 			expect(sec.isAllowed('/allowed/pathmore')).toBe(false);
 		});
+
+		it('allows child paths when allowlisted path has a trailing separator', () => {
+			// Regression: path.normalize preserves trailing separators.
+			// If the allowlist entry has a trailing "\", isAllowed must still
+			// match child paths.
+			const secTrailing = new SecurityManager(['C:\\foo\\bar\\']);
+			expect(secTrailing.isAllowed('C:\\foo\\bar\\README.md')).toBe(true);
+			expect(secTrailing.isAllowed('C:\\foo\\bar\\sub\\file.txt')).toBe(true);
+			expect(secTrailing.isAllowed('C:\\foo\\bar')).toBe(true);
+		});
 	});
 
 	describe('allow / revoke', () => {

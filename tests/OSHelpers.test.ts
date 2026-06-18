@@ -63,6 +63,27 @@ describe('OSHelpers', () => {
 				expect(result).toBe(result.toLowerCase());
 			});
 		});
+
+		it('strips trailing backslash on Windows', () => {
+			withPlatform('win32', () => {
+				const result = normalizeForComparison('C:\\foo\\bar\\');
+				expect(result).toBe('c:\\foo\\bar');
+			});
+		});
+
+		it('strips trailing forward slash on POSIX', () => {
+			withPlatform('linux', () => {
+				expect(normalizeForComparison('/foo/bar/')).toBe('/foo/bar');
+			});
+		});
+
+		it('preserves trailing separator for filesystem root', () => {
+			withPlatform('win32', () => {
+				// "C:\" is a root — trailing sep must stay
+				const result = normalizeForComparison('C:\\');
+				expect(result).toBe('c:\\');
+			});
+		});
 	});
 
 	describe('isUNCPath', () => {
