@@ -196,15 +196,30 @@ describe('FileWatcher', () => {
             return options.ignored;
         }
 
-        it('ignores hidden files (name starts with .)', () => {
-            const ignored = getIgnored();
+        function getIgnoredWithPatterns(isIgnored: (name: string, m: MountPoint, rel?: string) => boolean): (p: string) => boolean {
+            const { app } = makeApp();
+            const fw = new FileWatcher(app, makeMapper(mount), isIgnored);
+            fw.startWatching(mount);
+            const options = getWatchOptions();
+            if (!options.ignored) throw new Error('Expected ignored callback to be registered');
+            return options.ignored;
+        }
+
+        it('delegates dot-file filtering to isIgnored callback', () => {
+            const ignored = getIgnoredWithPatterns((name) => name === '.git' || name === '.DS_Store');
             expect(ignored('C:/Users/test/Documents/.git')).toBe(true);
             expect(ignored('C:/Users/test/Documents/.DS_Store')).toBe(true);
         });
 
-        it('ignores node_modules', () => {
-            const ignored = getIgnored();
+        it('delegates node_modules filtering to isIgnored callback', () => {
+            const ignored = getIgnoredWithPatterns((name) => name === 'node_modules');
             expect(ignored('C:/Users/test/Documents/node_modules')).toBe(true);
+        });
+
+        it('does not ignore dot-files when isIgnored returns false', () => {
+            const ignored = getIgnored();
+            expect(ignored('C:/Users/test/Documents/.env')).toBe(false);
+            expect(ignored('C:/Users/test/Documents/.obsidian_link')).toBe(false);
         });
 
         it('does not ignore regular files', () => {
