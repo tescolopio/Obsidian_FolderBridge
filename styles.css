@@ -251,3 +251,95 @@
     gap: 10px;
     margin-top: 20px;
 }
+
+/* ── File explorer mounted-folder indicators ─────────────────────────────── */
+
+/* Make the inner label fill the row so ::after can push to the right */
+.nav-folder-title.folderbridge-mounted .tree-item-inner {
+    display: flex;
+    align-items: center;
+    flex: 1;
+}
+
+/* Mount root folder: subtle link icon pushed to the right edge */
+.nav-folder-title.folderbridge-mounted .tree-item-inner::after {
+    margin-left: auto;
+    padding-left: 8px;
+    font-size: 0.75em;
+    opacity: 0.5;
+    font-weight: 400;
+}
+
+/* Mount-type-specific indicator colors */
+.nav-folder-title.folderbridge-mounted[data-folderbridge-mount-type="webdav"] .tree-item-inner::after {
+    content: "☁";
+    opacity: 0.55;
+    color: var(--color-blue);
+}
+
+.nav-folder-title.folderbridge-mounted[data-folderbridge-mount-type="s3"] .tree-item-inner::after {
+    content: "☁";
+    opacity: 0.55;
+    color: var(--color-orange);
+}
+
+.nav-folder-title.folderbridge-mounted[data-folderbridge-mount-type="sftp"] .tree-item-inner::after {
+    content: "⇄";
+    opacity: 0.55;
+    color: var(--color-green);
+}
+
+.nav-folder-title.folderbridge-mounted[data-folderbridge-mount-type="local"] .tree-item-inner::after {
+    content: "↗";
+    opacity: 0.5;
+    color: var(--text-muted);
+}
+
+/* Default (vault mount or unknown): also show the link icon */
+.nav-folder-title.folderbridge-mounted:not([data-folderbridge-mount-type]) .tree-item-inner::after,
+.nav-folder-title.folderbridge-mounted[data-folderbridge-mount-type="vault"] .tree-item-inner::after {
+    content: "↗";
+    opacity: 0.5;
+    color: var(--text-muted);
+}
+
+/* Hover: make the indicator more visible */
+.nav-folder-title.folderbridge-mounted:hover .tree-item-inner::after {
+    opacity: 0.8;
+}
+
+.tooltip.folderbridge-tooltip-container-augmented {
+    width: max-content !important;
+    max-width: min(70vw, 720px) !important;
+    height: auto !important;
+    min-height: unset !important;
+    max-height: none !important;
+    padding: 4px 8px !important;
+    border-radius: 4px;
+    overflow: visible !important;
+}
+
+.tooltip .folderbridge-tooltip-augmented {
+    display: block;
+    text-align: left;
+    white-space: nowrap;
+    width: max-content !important;
+    max-width: min(70vw, 720px) !important;
+    height: auto !important;
+    min-height: unset !important;
+    max-height: none !important;
+    overflow: visible !important;
+    opacity: 0.9;
+}
+
+.tooltip .folderbridge-tooltip-augmented .folderbridge-tooltip-line {
+    display: block;
+    max-width: min(70vw, 720px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.35;
+}
+
+.tooltip .folderbridge-tooltip-augmented .folderbridge-tooltip-line:not(:first-child) {
+    font-size: var(--font-ui-smaller);
+}

@@ -104,6 +104,10 @@ export default class FolderBridgePlugin extends Plugin {
 	// Preserve original app.openWithDefaultApp so we can restore it on unload
 	private originalOpenWithDefaultApp: unknown = null;
 	statusBarItem: HTMLElement | null = null;
+	explorerObserver: MutationObserver | null = null;
+	private explorerTooltipRoots = new WeakSet<HTMLElement>();
+	private nativeTooltipObserver: MutationObserver | null = null;
+	private activeExplorerMountTooltipText: string | null = null;
 
 	/** Tracks reachability per mount.id; populated by the 30-second health-check loop. */
 	mountHealthMap = new Map<string, boolean>();
@@ -770,6 +774,9 @@ export default class FolderBridgePlugin extends Plugin {
 					}
 				}
 
+				// Highlight mounted folders in the file explorer
+				this.setupExplorerHighlighting();
+
 				for (const mount of activeMounts) {
 					await this.notifyVaultMountAdded(mount);
 				}
@@ -798,6 +805,9 @@ export default class FolderBridgePlugin extends Plugin {
 	}
 
 	onunload() {
+		// Stop the file-explorer highlighting observer
+		this.teardownExplorerHighlighting();
+		this.teardownNativeTooltipObserver();
 		// Stop background health-check loop before watcher so no stale notices fire
 		if (this.healthCheckInterval !== null) {
 			clearInterval(this.healthCheckInterval);
@@ -843,6 +853,362 @@ export default class FolderBridgePlugin extends Plugin {
 	// ------------------------------------------------------------------
 	// Helpers
 	// ------------------------------------------------------------------
+
+	/**
+	 * Set up a MutationObserver on the file-explorer DOM to add visual
+	 * indicators (CSS classes) to mounted folders in the tree.
+	 *
+	 * Tooltip: the file explorer renders its file-count tooltip internally, so
+	 * mount details are merged into the already-open tooltip during hover.
+	 */
+	private setupExplorerHighlighting(): void {
+		this.teardownExplorerHighlighting();
+
+		const apply = () => this.highlightMountedInExplorer();
+
+		const tryObserve = () => {
+			const leaves = this.app.workspace.getLeavesOfType('file-explorer');
+			if (!leaves.length) return;
+			const explorerEl = leaves[0].view.containerEl;
+			this.registerExplorerTooltipAugmentation(explorerEl);
+			this.setupNativeTooltipObserver();
+
+			if (this.explorerObserver) {
+				apply();
+				return;
+			}
+
+			this.explorerObserver = new MutationObserver(() => apply());
+			this.explorerObserver.observe(explorerEl, { childList: true, subtree: true });
+			apply();
+		};
+
+		// Initial attempt
+		tryObserve();
+
+		// Re-attach when the file explorer is opened/closed
+		this.registerEvent(this.app.workspace.on('layout-change', () => {
+			// If the observer was lost (file explorer was closed), clean up
+			if (this.explorerObserver) {
+				// Check if the observed element is still in the DOM
+				const leaves = this.app.workspace.getLeavesOfType('file-explorer');
+				const stillAlive = leaves.length > 0 &&
+					document.contains(leaves[0].view.containerEl);
+				if (!stillAlive) {
+					this.explorerObserver.disconnect();
+					this.explorerObserver = null;
+				}
+			}
+			tryObserve();
+		}));
+	}
+
+	private teardownExplorerHighlighting(): void {
+		if (this.explorerObserver) {
+			this.explorerObserver.disconnect();
+			this.explorerObserver = null;
+		}
+	}
+
+	private setupNativeTooltipObserver(): void {
+		if (this.nativeTooltipObserver || !document.body) return;
+
+		this.nativeTooltipObserver = new MutationObserver(() => {
+			if (this.activeExplorerMountTooltipText) {
+				this.appendMountInfoToNativeTooltip(this.activeExplorerMountTooltipText);
+			} else {
+				this.removeMountInfoFromNativeTooltips();
+			}
+		});
+		this.nativeTooltipObserver.observe(document.body, { childList: true, subtree: true });
+	}
+
+	private teardownNativeTooltipObserver(): void {
+		if (this.nativeTooltipObserver) {
+			this.nativeTooltipObserver.disconnect();
+			this.nativeTooltipObserver = null;
+		}
+		this.activeExplorerMountTooltipText = null;
+	}
+
+	private registerExplorerTooltipAugmentation(explorerEl: HTMLElement): void {
+		if (this.explorerTooltipRoots.has(explorerEl)) return;
+		this.explorerTooltipRoots.add(explorerEl);
+
+		this.registerDomEvent(explorerEl, 'mouseover', (event: MouseEvent) => {
+			const target = event.target;
+			if (!(target instanceof HTMLElement)) return;
+
+			const titleEl = target.closest<HTMLElement>('.nav-folder-title, .nav-file-title');
+			if (!titleEl || !explorerEl.contains(titleEl)) return;
+
+			const folderTitleEl = titleEl.matches('.nav-folder-title.folderbridge-mounted')
+				? titleEl
+				: null;
+			if (!folderTitleEl) {
+				this.activeExplorerMountTooltipText = null;
+				this.removeMountInfoFromNativeTooltips();
+				return;
+			}
+
+			this.scheduleNativeTooltipAugmentation(folderTitleEl);
+		}, true);
+
+		this.registerDomEvent(explorerEl, 'mouseout', (event: MouseEvent) => {
+			const target = event.target;
+			if (!(target instanceof HTMLElement)) return;
+
+			const folderTitleEl = target.closest<HTMLElement>('.nav-folder-title.folderbridge-mounted');
+			if (!folderTitleEl || !explorerEl.contains(folderTitleEl)) return;
+
+			const relatedTarget = event.relatedTarget;
+			if (relatedTarget instanceof Node && folderTitleEl.contains(relatedTarget)) return;
+
+			this.activeExplorerMountTooltipText = null;
+			this.removeMountInfoFromNativeTooltips();
+		}, true);
+	}
+
+	private scheduleNativeTooltipAugmentation(folderTitleEl: HTMLElement): void {
+		const tooltipText = folderTitleEl.dataset.folderbridgeMountTooltip;
+		if (!tooltipText) return;
+		this.activeExplorerMountTooltipText = tooltipText;
+
+		const apply = () => this.appendMountInfoToNativeTooltip(tooltipText);
+		window.requestAnimationFrame(apply);
+		window.setTimeout(apply, 50);
+		window.setTimeout(apply, 150);
+		window.setTimeout(apply, 300);
+		window.setTimeout(apply, 600);
+	}
+
+	private appendMountInfoToNativeTooltip(tooltipText: string): void {
+		const tooltipEl = Array.from(document.querySelectorAll<HTMLElement>('.tooltip, [class~="tooltip"]'))
+			.reverse()
+			.find(el => {
+				const rect = el.getBoundingClientRect();
+				return rect.width > 0 && rect.height > 0;
+			});
+		if (!tooltipEl) return;
+
+		const contentEl = this.findNativeTooltipContentEl(tooltipEl);
+		const existingAugmented = tooltipEl.querySelector<HTMLElement>('.folderbridge-tooltip-augmented');
+		if (existingAugmented?.dataset.folderbridgeText === tooltipText) return;
+
+		const originalText = this.stripExplorerMountTooltipText(
+			existingAugmented?.dataset.folderbridgeOriginalText ?? contentEl.textContent?.trim() ?? ''
+		);
+		tooltipEl.addClass('folderbridge-tooltip-container-augmented');
+		const tooltipStyle = window.getComputedStyle(tooltipEl);
+		const tooltipBackgroundColor = this.getVisibleBackgroundColor(tooltipEl);
+		if (tooltipBackgroundColor) {
+			tooltipEl.style.backgroundColor = tooltipBackgroundColor;
+		}
+		tooltipEl.style.color = tooltipStyle.color;
+
+		contentEl.querySelectorAll<HTMLElement>('.folderbridge-tooltip-augmented').forEach(el => el.remove());
+		Array.from(contentEl.childNodes).forEach(node => {
+			if (node.nodeType === Node.TEXT_NODE && node.textContent?.trim()) {
+				node.remove();
+			}
+		});
+
+		const augmentedEl = document.createElement('div');
+		augmentedEl.className = 'folderbridge-tooltip-augmented';
+		augmentedEl.dataset.folderbridgeOriginalText = originalText;
+		augmentedEl.dataset.folderbridgeText = tooltipText;
+
+		for (const line of [originalText, ...tooltipText.split('\n')].filter(Boolean)) {
+			const lineEl = document.createElement('div');
+			lineEl.className = 'folderbridge-tooltip-line';
+			lineEl.textContent = line;
+			augmentedEl.appendChild(lineEl);
+		}
+		contentEl.appendChild(augmentedEl);
+	}
+
+	private findNativeTooltipContentEl(tooltipEl: HTMLElement): HTMLElement {
+		const existingAugmented = tooltipEl.querySelector<HTMLElement>('.folderbridge-tooltip-augmented');
+		if (existingAugmented?.parentElement instanceof HTMLElement) return existingAugmented.parentElement;
+
+		const candidates = [
+			...Array.from(tooltipEl.querySelectorAll<HTMLElement>('*')),
+			tooltipEl,
+		];
+
+		const visibleTextCandidates = candidates.filter(el => {
+			if (el.classList.contains('folderbridge-tooltip-augmented')) return true;
+			if (el.className.toString().includes('arrow')) return false;
+			const rect = el.getBoundingClientRect();
+			return rect.width > 0 && rect.height > 0 && !!el.textContent?.trim();
+		});
+
+		const leafTextEl = visibleTextCandidates.find(el =>
+			!Array.from(el.children).some(child => child.textContent?.trim() === el.textContent?.trim())
+		);
+		if (leafTextEl) return leafTextEl;
+
+		return tooltipEl.querySelector<HTMLElement>('.tooltip-content') ?? tooltipEl;
+	}
+
+	private stripExplorerMountTooltipText(text: string): string {
+		const markerIndices = ['Mount:', 'Path:']
+			.map(marker => text.indexOf(marker))
+			.filter(index => index >= 0);
+		const firstMarkerIndex = markerIndices.length > 0 ? Math.min(...markerIndices) : -1;
+		const baseText = firstMarkerIndex >= 0 ? text.slice(0, firstMarkerIndex) : text;
+		return baseText
+			.split('\n')
+			.map(line => line.trim())
+			.filter(line => line && !line.startsWith('Mount:') && !line.startsWith('Path:'))
+			.join(' ');
+	}
+
+	private getVisibleBackgroundColor(el: HTMLElement): string | null {
+		const candidates = [
+			el,
+			...Array.from(el.querySelectorAll<HTMLElement>('*')),
+		];
+
+		for (const candidate of candidates) {
+			const backgroundColor = window.getComputedStyle(candidate).backgroundColor;
+			if (
+				backgroundColor &&
+				backgroundColor !== 'transparent' &&
+				!backgroundColor.endsWith(', 0)') &&
+				backgroundColor !== 'rgba(0, 0, 0, 0)'
+			) {
+				return backgroundColor;
+			}
+		}
+
+		return null;
+	}
+
+	private removeMountInfoFromNativeTooltips(): void {
+		document.querySelectorAll<HTMLElement>('.folderbridge-tooltip-container-augmented').forEach(el => {
+			el.removeClass('folderbridge-tooltip-container-augmented');
+			el.style.removeProperty('background-color');
+			el.style.removeProperty('color');
+		});
+		document.querySelectorAll<HTMLElement>('.folderbridge-tooltip-augmented').forEach(el => {
+			const originalText = el.dataset.folderbridgeOriginalText;
+			if (originalText !== undefined) {
+				el.replaceWith(document.createTextNode(originalText));
+			} else {
+				el.remove();
+			}
+		});
+	}
+
+	private clearTooltipAttributes(el: HTMLElement, mount?: MountPoint, typeLabel?: string): void {
+		const mountText = mount ? [
+			mount.realPath,
+			typeLabel ?? '',
+			mount.label ?? '',
+			'FolderBridge',
+		].filter(Boolean) : ['FolderBridge'];
+
+		const elements = [el, ...Array.from(el.querySelectorAll<HTMLElement>('[title], [aria-label]'))];
+		for (const item of elements) {
+			item.removeAttribute('title');
+
+			const ariaLabel = item.getAttribute('aria-label');
+			if (ariaLabel && mountText.some(text => ariaLabel.includes(text))) {
+				item.removeAttribute('aria-label');
+			}
+		}
+	}
+
+	private setExplorerMountMetadata(el: HTMLElement, mount: MountPoint, typeLabel: string): void {
+		this.clearTooltipAttributes(el, mount, typeLabel);
+
+		const label = mount.label ? ` (${mount.label})` : '';
+		el.dataset.folderbridgeMountTooltip = [
+			`Mount: ${typeLabel}${label}`,
+			`Path: ${mount.realPath}`,
+		].join('\n');
+	}
+
+	private clearExplorerMountMetadata(el: HTMLElement): void {
+		this.clearTooltipAttributes(el);
+		delete el.dataset.folderbridgeMountTooltip;
+	}
+
+	/**
+	 * Walk the file-explorer DOM and add CSS classes to tree items whose
+	 * path belongs to a mount point.  Also sets a tooltip with mount source
+	 * details on the root folder of each mount.
+	 */
+	private highlightMountedInExplorer(): void {
+		const leaves = this.app.workspace.getLeavesOfType('file-explorer');
+		if (!leaves.length) return;
+
+		const explorerEl = leaves[0].view.containerEl;
+
+		// Collect mount paths for fast lookup
+		const activeMounts = this.settings.mountPoints.filter(m => m.enabled);
+		const mountPaths = new Set(activeMounts.map(m => normalizePath(m.virtualPath)));
+		// Map: path -> MountPoint for tooltip and type-specific styling
+		const mountMap = new Map<string, MountPoint>();
+		for (const m of activeMounts) {
+			mountMap.set(normalizePath(m.virtualPath), m);
+		}
+
+		const mountTypeLabel: Record<string, string> = {
+			local: 'Local folder',
+			vault: 'External vault',
+			webdav: 'WebDAV',
+			s3: 'S3',
+			sftp: 'SFTP',
+		};
+
+		// Process folder items
+		explorerEl.querySelectorAll<HTMLElement>('.nav-folder-title').forEach(el => {
+			const dataPath = el.getAttribute('data-path');
+			if (!dataPath) return;
+			const normalized = normalizePath(dataPath);
+
+			if (mountPaths.has(normalized)) {
+				// This is the mount root folder
+				el.classList.add('folderbridge-mounted');
+				const mount = mountMap.get(normalized);
+				const mountType = mount?.mountType ?? 'local';
+				el.setAttribute('data-folderbridge-mount-type', mountType);
+
+				if (mount) {
+					const typeLabel = mountTypeLabel[mountType] ?? mountType;
+					this.setExplorerMountMetadata(el, mount, typeLabel);
+				}
+			} else {
+				el.classList.remove('folderbridge-mounted');
+				el.removeAttribute('data-folderbridge-mount-type');
+				this.clearExplorerMountMetadata(el);
+			}
+
+			// Check if this folder is a child of a mounted folder
+			const isChild = [...mountPaths].some(mp => normalized.startsWith(mp + '/'));
+			if (isChild) {
+				el.classList.add('folderbridge-mounted-child');
+			} else {
+				el.classList.remove('folderbridge-mounted-child');
+			}
+		});
+
+		// Also mark files inside mounted folders
+		explorerEl.querySelectorAll<HTMLElement>('.nav-file-title').forEach(el => {
+			const dataPath = el.getAttribute('data-path');
+			if (!dataPath) return;
+			const normalized = normalizePath(dataPath);
+
+			const isInMount = [...mountPaths].some(mp => normalized.startsWith(mp + '/'));
+			if (isInMount) {
+				el.classList.add('folderbridge-mounted-child');
+			} else {
+				el.classList.remove('folderbridge-mounted-child');
+			}
+		});
+	}
 
 	private ignoreCache = new Map<string, { nameStrings: string[], pathStrings: string[], regexes: RegExp[] }>();
 
@@ -1753,6 +2119,9 @@ export default class FolderBridgePlugin extends Plugin {
 
 		// [FEATURE_20260222] Start watching the mount for external changes
 		this.fileWatcher?.startWatching(mount);
+
+		// Refresh file-explorer highlights after mount injection
+		setTimeout(() => this.highlightMountedInExplorer(), 200);
 	}
 
 	/**
@@ -1804,6 +2173,9 @@ export default class FolderBridgePlugin extends Plugin {
 		} catch (e) {
 			logger.debug('Folder Bridge: vault.onChange(folder-removed) unavailable', e);
 		}
+
+		// Refresh file-explorer highlights after mount removal
+		setTimeout(() => this.highlightMountedInExplorer(), 200);
 	}
 
 	// ------------------------------------------------------------------
