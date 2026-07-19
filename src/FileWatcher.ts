@@ -171,6 +171,10 @@ export class FileWatcher {
             // Per-mount polling override (useful for network drives / NAS that don't
             // support native inotify / kqueue / ReadDirectoryChangesW events)
             usePolling: mount.watcherUsePolling ?? false,
+            // Obsidian's Electron runtime can expose an incompatible fsevents
+            // binding on macOS. Force chokidar onto fs.watch/polling so watcher
+            // startup cannot crash with native fsevents argument errors.
+            useFsEvents: false,
             interval: mount.watcherPollingIntervalMs ?? 2000,
             awaitWriteFinish: {
                 stabilityThreshold: 500,
