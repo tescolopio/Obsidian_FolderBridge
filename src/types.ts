@@ -128,6 +128,12 @@ export interface FolderBridgeSettings {
 	globalIgnorePatterns: string[];
 	/** Set to true after the first-run welcome modal has been shown. */
 	hasSeenOnboarding: boolean;
+	/**
+	 * File explorer expansion state for virtual mount folders and their
+	 * descendants. Obsidian restores native folders before Folder Bridge injects
+	 * virtual folders, so these paths need a plugin-owned state cache.
+	 */
+	explorerExpansionState: Record<string, boolean>;
 }
 
 export const DEFAULT_SETTINGS: FolderBridgeSettings = {
@@ -143,6 +149,7 @@ export const DEFAULT_SETTINGS: FolderBridgeSettings = {
 	maxDataUriMB: 10,
 	globalIgnorePatterns: ['.DS_Store', 'Thumbs.db', 'desktop.ini', '.git'],
 	hasSeenOnboarding: false,
+	explorerExpansionState: {},
 };
 
 export interface MountStatus {
