@@ -45,6 +45,20 @@ type AppInternal = {
 	openWithDefaultApp?(filePath: string): void;
 };
 
+type FileExplorerFolderItem = {
+	setCollapsed?: (collapsed: boolean) => void;
+	collapsed?: boolean;
+	isCollapsed?: boolean;
+	el?: HTMLElement;
+	selfEl?: HTMLElement;
+	containerEl?: HTMLElement;
+	titleEl?: HTMLElement;
+};
+
+type FileExplorerView = {
+	fileItems?: Record<string, FileExplorerFolderItem>;
+};
+
 type DesktopVaultAdapter = DataAdapter & {
 	getBasePath?(): string;
 };
@@ -106,6 +120,8 @@ export default class FolderBridgePlugin extends Plugin {
 	statusBarItem: HTMLElement | null = null;
 	explorerObserver: MutationObserver | null = null;
 	private explorerTooltipRoots = new WeakSet<HTMLElement>();
+	private explorerExpansionRoots = new WeakSet<HTMLElement>();
+	private explorerExpansionSaveTimer: number | null = null;
 	private nativeTooltipObserver: MutationObserver | null = null;
 	private activeExplorerMountTooltipText: string | null = null;
 
@@ -827,6 +843,11 @@ export default class FolderBridgePlugin extends Plugin {
 	}
 
 	onunload() {
+		if (this.explorerExpansionSaveTimer !== null) {
+			window.clearTimeout(this.explorerExpansionSaveTimer);
+			this.explorerExpansionSaveTimer = null;
+			void this.saveSettings();
+		}
 		// Stop the file-explorer highlighting observer
 		this.teardownExplorerHighlighting();
 		this.teardownNativeTooltipObserver();
@@ -893,6 +914,7 @@ export default class FolderBridgePlugin extends Plugin {
 			if (!leaves.length) return;
 			const explorerEl = leaves[0].view.containerEl;
 			this.registerExplorerTooltipAugmentation(explorerEl);
+			this.registerExplorerExpansionTracking(explorerEl);
 			this.setupNativeTooltipObserver();
 
 			if (this.explorerObserver) {
@@ -989,6 +1011,134 @@ export default class FolderBridgePlugin extends Plugin {
 			this.activeExplorerMountTooltipText = null;
 			this.removeMountInfoFromNativeTooltips();
 		}, true);
+	}
+
+	private registerExplorerExpansionTracking(explorerEl: HTMLElement): void {
+		if (this.explorerExpansionRoots.has(explorerEl)) return;
+		this.explorerExpansionRoots.add(explorerEl);
+
+		const scheduleFromEvent = (event: Event) => {
+			const target = event.target;
+			if (!(target instanceof HTMLElement)) return;
+
+			const titleEl = target.closest<HTMLElement>('.nav-folder-title');
+			if (!titleEl || !explorerEl.contains(titleEl)) return;
+
+			const dataPath = titleEl.getAttribute('data-path');
+			if (!dataPath || !this.isFolderBridgeExplorerPath(dataPath)) return;
+
+			this.scheduleExplorerExpansionStateCapture(explorerEl);
+		};
+
+		this.registerDomEvent(explorerEl, 'click', scheduleFromEvent, true);
+		this.registerDomEvent(explorerEl, 'keydown', (event: KeyboardEvent) => {
+			if (!['Enter', ' ', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+			scheduleFromEvent(event);
+		}, true);
+	}
+
+	private getFileExplorerView(): FileExplorerView | null {
+		const leaves = this.app.workspace.getLeavesOfType('file-explorer');
+		if (!leaves.length) return null;
+		return leaves[0].view as unknown as FileExplorerView;
+	}
+
+	private isFolderBridgeExplorerPath(pathValue: string): boolean {
+		const normalized = normalizePath(pathValue);
+		if (!normalized) return false;
+
+		const activeMountPaths = this.settings.mountPoints
+			.filter(m => m.enabled && (m.deviceId === this.settings.deviceId || this.settings.allowForeignMounts))
+			.map(m => normalizePath(m.virtualPath));
+
+		return activeMountPaths.some(mountPath =>
+			normalized === mountPath ||
+			normalized.startsWith(mountPath + '/') ||
+			mountPath.startsWith(normalized + '/')
+		);
+	}
+
+	private scheduleExplorerExpansionStateCapture(explorerEl: HTMLElement): void {
+		window.setTimeout(() => this.captureExplorerExpansionState(explorerEl), 75);
+		window.setTimeout(() => this.captureExplorerExpansionState(explorerEl), 250);
+	}
+
+	private captureExplorerExpansionState(explorerEl: HTMLElement): void {
+		let changed = false;
+		const nextState = {
+			...(this.settings.explorerExpansionState ?? {}),
+		};
+
+		explorerEl.querySelectorAll<HTMLElement>('.nav-folder-title[data-path]').forEach(titleEl => {
+			const dataPath = titleEl.getAttribute('data-path');
+			if (!dataPath || !this.isFolderBridgeExplorerPath(dataPath)) return;
+
+			const normalized = normalizePath(dataPath);
+			const expanded = this.readExplorerFolderExpanded(normalized, titleEl);
+			if (expanded === null) return;
+
+			if (nextState[normalized] !== expanded) {
+				nextState[normalized] = expanded;
+				changed = true;
+			}
+		});
+
+		if (!changed) return;
+		this.settings.explorerExpansionState = nextState;
+		this.queueExplorerExpansionStateSave();
+	}
+
+	private queueExplorerExpansionStateSave(): void {
+		if (this.explorerExpansionSaveTimer !== null) {
+			window.clearTimeout(this.explorerExpansionSaveTimer);
+		}
+		this.explorerExpansionSaveTimer = window.setTimeout(() => {
+			this.explorerExpansionSaveTimer = null;
+			void this.saveSettings();
+		}, 500);
+	}
+
+	private readExplorerFolderExpanded(pathValue: string, titleEl?: HTMLElement): boolean | null {
+		const item = this.getFileExplorerView()?.fileItems?.[normalizePath(pathValue)];
+		if (typeof item?.collapsed === 'boolean') return !item.collapsed;
+		if (typeof item?.isCollapsed === 'boolean') return !item.isCollapsed;
+
+		const itemRoot = item?.selfEl ?? item?.containerEl ?? item?.el ?? item?.titleEl;
+		const folderEl = titleEl?.closest<HTMLElement>('.nav-folder') ?? itemRoot?.closest<HTMLElement>('.nav-folder');
+		if (!folderEl) return null;
+
+		if (folderEl.classList.contains('is-collapsed')) return false;
+		if (folderEl.classList.contains('is-expanded')) return true;
+
+		const childContainer = folderEl.querySelector<HTMLElement>(':scope > .nav-folder-children');
+		if (!childContainer) return null;
+		return window.getComputedStyle(childContainer).display !== 'none';
+	}
+
+	private applySavedExplorerExpansionState(mount: MountPoint): void {
+		const savedState = this.settings.explorerExpansionState ?? {};
+		const savedPaths = Object.keys(savedState);
+		if (savedPaths.length === 0) return;
+
+		const mountPath = normalizePath(mount.virtualPath);
+		const fileItems = this.getFileExplorerView()?.fileItems;
+		if (!fileItems) return;
+
+		for (const savedPath of savedPaths) {
+			const normalized = normalizePath(savedPath);
+			if (
+				normalized !== mountPath &&
+				!normalized.startsWith(mountPath + '/') &&
+				!mountPath.startsWith(normalized + '/')
+			) {
+				continue;
+			}
+
+			const folderItem = fileItems[normalized];
+			if (typeof folderItem?.setCollapsed === 'function') {
+				folderItem.setCollapsed(!savedState[savedPath]);
+			}
+		}
 	}
 
 	private scheduleNativeTooltipAugmentation(folderTitleEl: HTMLElement): void {
@@ -2121,22 +2271,11 @@ export default class FolderBridgePlugin extends Plugin {
 			}
 		}
 
-		// Force the file explorer to refresh the folder contents by expanding and collapsing it
+		// Restore Folder Bridge's own expansion cache after virtual folders have
+		// been injected. Obsidian restores native folder state before these paths
+		// exist, so mount folders need this late pass.
 		if (!suppressionEnabled) setTimeout(() => {
-			const fileExplorerLeaves = this.app.workspace.getLeavesOfType('file-explorer');
-			if (fileExplorerLeaves.length === 0) return;
-
-			type FileExplorerView = { fileItems?: Record<string, { setCollapsed?: (collapsed: boolean) => void }> };
-			const fileExplorerView = fileExplorerLeaves[0].view as unknown as FileExplorerView;
-			const fileItems = fileExplorerView.fileItems;
-
-			const folderPath = normalizePath(mount.virtualPath);
-			if (fileItems && fileItems[folderPath]) {
-				const folderItem = fileItems[folderPath];
-				if (typeof folderItem.setCollapsed === 'function') {
-					folderItem.setCollapsed(false);
-				}
-			}
+			this.applySavedExplorerExpansionState(mount);
 		}, 100);
 
 		// [FEATURE_20260222] Start watching the mount for external changes
@@ -2419,6 +2558,9 @@ export default class FolderBridgePlugin extends Plugin {
 		const data = await this.loadData() as Record<string, unknown>;
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
 		this.settings.managedTocSource = this.settings.managedTocSource ?? '';
+		this.settings.explorerExpansionState = {
+			...(this.settings.explorerExpansionState ?? {}),
+		};
 		this.persistedMountPoints = [...this.settings.mountPoints];
 		this.persistedAllowlist = [...this.settings.allowlist];
 
