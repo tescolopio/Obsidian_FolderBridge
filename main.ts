@@ -672,8 +672,30 @@ export default class FolderBridgePlugin extends Plugin {
 		// Add context menu item to ignore files/folders
 		this.registerEvent(
 			this.app.workspace.on('file-menu', (menu, file) => {
-				// Only show if the file is inside a mounted folder
 				const mount = this.pathMapper.getMountForPath(file.path);
+
+				if (file instanceof TFolder && !mount) {
+					menu.addItem((item) => {
+						item
+							.setTitle('Mount external folder here\u2026')
+							.setIcon('folder-plus')
+							.onClick(() => {
+								new MountManagerModal(
+									this.app,
+									this.manifest.name,
+									this.security,
+									async (newMount) => { await this.addMount(newMount); },
+									undefined,
+									{
+										mountType: 'local',
+										virtualPath: normalizePath(file.path),
+									},
+								).open();
+							});
+					});
+				}
+
+				// The remaining context actions apply only inside mounted folders.
 				if (!mount) return;
 
 				// "Move mount to…" — only on the mount's own root folder

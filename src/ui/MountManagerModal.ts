@@ -157,6 +157,7 @@ export class VaultFolderPickerModal extends SuggestModal<string> {
 
 /** Callback invoked by the modal when the user successfully validates a mount. */
 export type OnMountSave = (mount: Omit<MountPoint, 'id'>, editId?: string) => Promise<void>;
+type MountManagerInitialValues = Partial<Pick<MountPoint, 'mountType' | 'virtualPath' | 'realPath' | 'label' | 'readOnly'>>;
 
 // ---------------------------------------------------------------------------
 // MountManagerModal
@@ -222,7 +223,14 @@ export class MountManagerModal extends Modal {
 	private cancelButton: ButtonComponent | null = null;
 	private readonly submitState: SubmitStateController;
 
-	constructor(app: App, pluginName: string, security: SecurityManager, onSave: OnMountSave, editMount?: MountPoint) {
+	constructor(
+		app: App,
+		pluginName: string,
+		security: SecurityManager,
+		onSave: OnMountSave,
+		editMount?: MountPoint,
+		initialValues?: MountManagerInitialValues,
+	) {
 		super(app);
 		this.pluginName = pluginName;
 		this.security = security;
@@ -264,6 +272,12 @@ export class MountManagerModal extends Modal {
 			this.watcherCreateFilter = editMount.watcherCreateFilter ?? 'all';
 			this.watcherSuppressAllEvents = editMount.watcherSuppressAllEvents ?? false;
 			this.maxFiles = editMount.maxFiles;
+		} else if (initialValues) {
+			this.mountType = initialValues.mountType ?? this.mountType;
+			this.virtualPath = initialValues.virtualPath ?? this.virtualPath;
+			this.realPath = initialValues.realPath ?? this.realPath;
+			this.readOnly = initialValues.readOnly ?? this.readOnly;
+			this.label = initialValues.label ?? this.label;
 		}
 	}
 
