@@ -48,6 +48,15 @@ describe('SecurityManager', () => {
 			expect(sec.isAllowed('/new/path/file.txt')).toBe(true);
 		});
 
+		it('allows child paths when the allowlisted path has a trailing separator', () => {
+			withPlatform('win32', () => {
+				const secTrailing = new SecurityManager(['C:\\foo\\bar\\']);
+				expect(secTrailing.isAllowed('C:\\foo\\bar\\README.md')).toBe(true);
+				expect(secTrailing.isAllowed('C:\\foo\\bar\\sub\\file.txt')).toBe(true);
+				expect(secTrailing.isAllowed('C:\\foo\\bar')).toBe(true);
+			});
+		});
+
 		it('revokes an allowlisted path', () => {
 			sec.revoke('/allowed/path');
 			expect(sec.isAllowed('/allowed/path')).toBe(false);
@@ -77,6 +86,16 @@ describe('SecurityManager', () => {
 			expect(sec.validateMount(mkMount('Work', 'relative/path'), [])).toMatch(/absolute/i);
 		});
 
+		it('rejects a non-absolute fallback real path', () => {
+			expect(sec.validateMount({ ...mkMount('Work', '/home/user/Work'), fallbackRealPath: 'relative/fallback' }, [])).toMatch(/fallback.*absolute/i);
+		});
+
+		it('allows WSL UNC paths on Windows', () => {
+			withPlatform('win32', () => {
+				expect(sec.validateMount(mkMount('WSL Notes', '\\\\wsl$\\Ubuntu\\home\\obsidian-private'), [])).toBeNull();
+			});
+		});
+
 		it('blocks the POSIX system root /', () => {
 			expect(sec.validateMount(mkMount('Root', '/'), [])).toMatch(/protected/i);
 		});
@@ -87,6 +106,10 @@ describe('SecurityManager', () => {
 
 		it('blocks /etc subdirectories', () => {
 			expect(sec.validateMount(mkMount('Ssl', '/etc/ssl'), [])).toMatch(/protected/i);
+		});
+
+		it('blocks dangerous fallback paths like /etc', () => {
+			expect(sec.validateMount({ ...mkMount('Work', '/home/user/Work'), fallbackRealPath: '/etc' }, [])).toMatch(/protected.*fallback/i);
 		});
 
 		it('rejects a duplicate virtual path', () => {

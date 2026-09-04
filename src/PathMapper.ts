@@ -28,6 +28,9 @@ export class PathMapper {
 		normalizedVirtualPath: string;
 	}> = [];
 
+	/** Runtime-resolved fallback paths keyed by mount id. */
+	private resolvedRealPaths: Map<string, string> = new Map();
+
 	/** Replace the active mount list (call after settings change). */
 	update(mounts: MountPoint[], deviceId: string = ''): void {
 		this.currentDeviceId = deviceId;
@@ -38,6 +41,18 @@ export class PathMapper {
 		this.sortedMountCache = this.mounts
 			.map(m => ({ mount: m, normalizedVirtualPath: normalizePath(m.virtualPath) }))
 			.sort((a, b) => b.normalizedVirtualPath.length - a.normalizedVirtualPath.length);
+		const activeIds = new Set(this.mounts.map(m => m.id));
+		for (const id of this.resolvedRealPaths.keys()) {
+			if (!activeIds.has(id)) this.resolvedRealPaths.delete(id);
+		}
+	}
+
+	setResolvedPath(mountId: string, resolvedPath: string): void {
+		this.resolvedRealPaths.set(mountId, resolvedPath);
+	}
+
+	clearResolvedPath(mountId: string): void {
+		this.resolvedRealPaths.delete(mountId);
 	}
 
 	getMounts(): MountPoint[] {
@@ -51,6 +66,9 @@ export class PathMapper {
 	getEffectiveRealPath(mount: MountPoint): string {
 		if (this.currentDeviceId && mount.deviceOverrides && mount.deviceOverrides[this.currentDeviceId]) {
 			return mount.deviceOverrides[this.currentDeviceId];
+		}
+		if (this.resolvedRealPaths.has(mount.id)) {
+			return this.resolvedRealPaths.get(mount.id)!;
 		}
 		return mount.realPath;
 	}

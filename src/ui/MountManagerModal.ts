@@ -5,6 +5,7 @@ import { checkPathAccessible, isDirectory, getPlatform, isWSL } from '../OSHelpe
 import { logger } from '../logger';
 import { getRuntimeRequire, loadOptionalNodeModule } from '../runtimeNode';
 import { SubmitStateController } from './SubmitStateController';
+import { shouldUseFolderNameAsLabel } from './mountLabel';
 
 // Lazy-loaded — unavailable on Obsidian Mobile (Capacitor).
 const path: typeof import('path') = loadOptionalNodeModule<typeof import('path')>('path') ?? null as never;
@@ -12,6 +13,13 @@ const path: typeof import('path') = loadOptionalNodeModule<typeof import('path')
 /** Minimal interface for Electron's dialog module. */
 interface ElectronDialog {
 	showOpenDialog(options: ElectronOpenDialogOptions): Promise<{ canceled: boolean; filePaths: string[] }>;
+}
+
+interface ElectronModule {
+	dialog?: ElectronDialog;
+	remote?: {
+		dialog?: ElectronDialog;
+	};
 }
 
 /** Options for Electron's dialog.showOpenDialog. */
@@ -33,12 +41,10 @@ interface ElectronOpenDialogOptions {
 export async function browseFolderOnDisk(title = 'Select folder', defaultPath?: string): Promise<string | null> {
 	try {
 		const runtimeRequire = getRuntimeRequire();
-		// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-		const electron = runtimeRequire?.('electron');
+		const electron = runtimeRequire?.('electron') as ElectronModule | undefined;
 		// Electron ≥ 14 ships remote via @electron/remote; Obsidian re-exports
 		// it on the electron object so both old and new versions work here.
-		// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-		const dialog: ElectronDialog | undefined = (electron as Record<string, unknown>)?.remote?.dialog ?? (electron as Record<string, unknown>)?.dialog;
+		const dialog: ElectronDialog | undefined = electron?.remote?.dialog ?? electron?.dialog;
 		if (!dialog?.showOpenDialog) {
 			new Notice('Native folder browser is unavailable. Please type the path manually.');
 			return null;
@@ -68,10 +74,8 @@ export async function browseFolderOnDisk(title = 'Select folder', defaultPath?: 
 export async function browseMultipleFoldersOnDisk(title = 'Select folders', defaultPath?: string): Promise<string[] | null> {
 	try {
 		const runtimeRequire = getRuntimeRequire();
-		// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-		const electron = runtimeRequire?.('electron');
-		// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-		const dialog: ElectronDialog | undefined = (electron as Record<string, unknown>)?.remote?.dialog ?? (electron as Record<string, unknown>)?.dialog;
+		const electron = runtimeRequire?.('electron') as ElectronModule | undefined;
+		const dialog: ElectronDialog | undefined = electron?.remote?.dialog ?? electron?.dialog;
 		if (!dialog?.showOpenDialog) {
 			new Notice('Native folder browser is unavailable. Please type the path manually.');
 			return null;
@@ -183,6 +187,7 @@ export class MountManagerModal extends Modal {
 	private mountType: MountType = 'local';
 	private virtualPath = '';
 	private realPath = '';
+	private fallbackRealPath = '';
 	private readOnly = false;
 	private label = '';
 	private useFolderNameAsLabel = false;
@@ -237,8 +242,10 @@ export class MountManagerModal extends Modal {
 			this.mountType = editMount.mountType ?? 'local';
 			this.virtualPath = editMount.virtualPath;
 			this.realPath = editMount.realPath;
+			this.fallbackRealPath = editMount.fallbackRealPath ?? '';
 			this.readOnly = editMount.readOnly;
 			this.label = editMount.label ?? '';
+			this.useFolderNameAsLabel = shouldUseFolderNameAsLabel(this.realPath, this.label);
 			// WebDAV
 			this.webdavUrl = editMount.webdavUrl ?? '';
 			this.webdavUsername = editMount.webdavUsername ?? '';
@@ -764,6 +771,36 @@ export class MountManagerModal extends Modal {
 			});
 		}
 
+		let fallbackPathText: import('obsidian').TextComponent | null = null;
+		new Setting(localSection)
+			.setName('Fallback path (optional)')
+			.setDesc(
+				'Alternative folder tried automatically if the real path above is not ' +
+				'accessible on this machine. Useful for cross-platform vaults.'
+			)
+			.addText(text => {
+				fallbackPathText = text;
+				text.inputEl.addClass('folderbridge-input-flex');
+				text.inputEl.addClass('folderbridge-input-min-200');
+				text.setPlaceholder('Enter a fallback folder path for this device')
+					.setValue(this.fallbackRealPath)
+					.onChange(val => { this.fallbackRealPath = val.trim(); });
+			})
+			.addButton(btn => {
+				btn.setButtonText('Browse…')
+					.setTooltip('Open the system folder picker')
+					.onClick(() => {
+						void (async () => {
+							const selected = await browseFolderOnDisk('Select fallback folder');
+							if (selected) {
+								this.fallbackRealPath = selected;
+								fallbackPathText?.setValue(selected);
+							}
+						})();
+					});
+				btn.buttonEl.setAttribute('aria-label', 'Browse for fallback folder on disk');
+			});
+
 		// ── Virtual path ───────────────────────────────────────────────────
 		new Setting(contentEl)
 			.setName('Virtual path (in vault)')
@@ -810,7 +847,7 @@ export class MountManagerModal extends Modal {
 				'The label is what appears in the settings panel instead of the full path.'
 			)
 			.addToggle(toggle => toggle
-				.setValue(false)
+				.setValue(this.useFolderNameAsLabel)
 				.onChange(val => {
 					this.useFolderNameAsLabel = val;
 					// Only auto-fill when enabling the toggle and the label is currently empty
@@ -1210,12 +1247,6 @@ export class MountManagerModal extends Modal {
 			new Notice(`${this.pluginName}: Real path is required.`);
 			return;
 		}
-		if (!path.isAbsolute(this.realPath)) {
-			this.submitState.finish();
-			this.syncSubmitButtons();
-			new Notice(`${this.pluginName}: Real path must be an absolute filesystem path.`);
-			return;
-		}
 
 		const normalizedVirtual = normalizePath(virtualPathToUse);
 
@@ -1224,6 +1255,7 @@ export class MountManagerModal extends Modal {
 			{
 				virtualPath: normalizedVirtual,
 				realPath: this.realPath,
+				fallbackRealPath: this.fallbackRealPath || undefined,
 				enabled: true,
 				readOnly: this.readOnly,
 				label: this.label || undefined,
@@ -1237,9 +1269,16 @@ export class MountManagerModal extends Modal {
 			return;
 		}
 
-		// Only re-check accessibility when the real path has changed (or this is a new mount)
+		// Only re-check absoluteness and accessibility when the real path has changed.
 		const realPathChanged = !this.editMount || this.editMount.realPath !== this.realPath;
 		if (realPathChanged) {
+			const isAbsolute = path.posix.isAbsolute(this.realPath) || path.win32.isAbsolute(this.realPath);
+			if (!isAbsolute) {
+				this.submitState.finish();
+				this.syncSubmitButtons();
+				new Notice(`${this.pluginName}: Real path must be an absolute filesystem path.`);
+				return;
+			}
 			const dirExists = await isDirectory(this.realPath);
 			if (!dirExists) {
 				this.submitState.finish();
@@ -1267,6 +1306,7 @@ export class MountManagerModal extends Modal {
 			{
 				virtualPath: normalizedVirtual,
 				realPath: this.realPath,
+				fallbackRealPath: this.fallbackRealPath || undefined,
 				enabled: this.editMount ? this.editMount.enabled : true,
 				readOnly: this.readOnly,
 				label: this.label || undefined,

@@ -311,11 +311,16 @@ export function tryReadAsDataUri(realPath: string, maxBytes = MAX_SYNC_DATA_URI_
  * treated as the same path.  On POSIX systems the case is preserved.
  */
 export function normalizeForComparison(p: string): string {
-	let n = path.normalize(p);
-	if (getPlatform() !== 'windows' && path.sep === '\\') {
-		n = n.replace(/\\/g, '/');
+	if (getPlatform() === 'windows') {
+		const normalized = path.win32.normalize(p);
+		const root = path.win32.parse(normalized).root;
+		const trimmed = normalized !== root ? normalized.replace(/[\\/]+$/, '') : normalized;
+		return trimmed.replace(/\\/g, '/').toLowerCase();
 	}
-	return getPlatform() === 'windows' ? n.toLowerCase() : n;
+
+	const normalized = path.posix.normalize(p);
+	const root = path.posix.parse(normalized).root;
+	return normalized !== root ? normalized.replace(/\/+$|\/+$/g, '') : normalized;
 }
 
 /**

@@ -588,6 +588,18 @@ export class VirtualAdapter {
 		return this.orig().read(normalizedPath);
 	}
 
+	async cachedRead(normalizedPath: string): Promise<string> {
+		const mount = this.pathMapper.getMountForPath(normalizedPath);
+		if (mount) {
+			return this.read(normalizedPath);
+		}
+		const original = this.orig() as DataAdapter & { cachedRead?: (path: string) => Promise<string> };
+		if (typeof original.cachedRead === 'function') {
+			return original.cachedRead(normalizedPath);
+		}
+		return this.orig().read(normalizedPath);
+	}
+
 	async readBinary(normalizedPath: string): Promise<ArrayBuffer> {
 		const mount = this.pathMapper.getMountForPath(normalizedPath);
 		if (mount) {

@@ -9,6 +9,12 @@ export interface MountPoint {
 	id: string;            // Unique identifier (generated at creation)
 	virtualPath: string;   // Normalized vault path, e.g. "Projects/Work"
 	realPath: string;      // Absolute OS path (local/vault) OR server-relative path (webdav/sftp) OR S3 prefix (s3)
+	/**
+	 * Alternative path tried automatically when realPath is not accessible.
+	 * Useful for cross-platform vaults: set the Windows path as realPath and the
+	 * Linux/macOS path here (or vice-versa).
+	 */
+	fallbackRealPath?: string;
 	enabled: boolean;      // Whether the mount is currently active
 	readOnly: boolean;     // Block all write operations through this mount
 	label?: string;        // Optional human-readable display name
@@ -113,6 +119,8 @@ export interface FolderBridgeSettings {
 	mountPoints: MountPoint[];
 	allowlist: string[];    // Approved real paths (must match before any I/O)
 	managedTocSource: string; // Optional writable TOC file for UI-managed local/vault mounts
+	/** Alternative TOC path tried when the primary managed TOC path is unavailable. */
+	managedTocSourceFallback?: string;
 	tocSources: string[];   // Absolute paths to JSON config files that define additional mounts
 	dryRun: boolean;        // Log writes without executing them
 	showStatusBar: boolean;
@@ -134,6 +142,7 @@ export const DEFAULT_SETTINGS: FolderBridgeSettings = {
 	mountPoints: [],
 	allowlist: [],
 	managedTocSource: '',
+	managedTocSourceFallback: undefined,
 	tocSources: [],
 	dryRun: false,
 	showStatusBar: true,
@@ -157,6 +166,7 @@ export interface TocFileMount {
 	deviceId?: string;
 	virtualPath: string;
 	realPath: string;
+	fallbackRealPath?: string;
 	label?: string;
 	enabled?: boolean;
 	readOnly?: boolean;

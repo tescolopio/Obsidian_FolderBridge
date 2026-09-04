@@ -6,7 +6,7 @@ import { SecurityManager } from './src/SecurityManager';
 import { MountManagerModal, getMountStatus, browseFolderOnDisk, browseMultipleFoldersOnDisk, VaultFolderPickerModal } from './src/ui/MountManagerModal';
 import { MountRootDeleteModal } from './src/ui/MountRootDeleteModal';
 import { WelcomeModal } from './src/ui/WelcomeModal';
-import { getPlatform, realPathToResourceUrl, tryReadAsDataUri } from './src/OSHelpers';
+import { checkPathAccessible, getPlatform, realPathToResourceUrl, tryReadAsDataUri } from './src/OSHelpers';
 import { FileServer } from './src/FileServer';
 import {
 	encryptCredential, decryptCredential,
@@ -91,6 +91,8 @@ export default class FolderBridgePlugin extends Plugin {
 	private managedTocMountPoints: MountPoint[] = [];
 	private externalTocMountPoints: MountPoint[] = [];
 	private tocWarnings: string[] = [];
+	/** Runtime-resolved managed TOC path (primary or fallback, whichever is accessible). */
+	resolvedManagedTocSource = '';
 	/** Localhost HTTP server — streams video/audio from local mounts with range-request support. */
 	fileServer: FileServer = new FileServer();
 
@@ -121,13 +123,69 @@ export default class FolderBridgePlugin extends Plugin {
 		return !this.isTocManagedMount(mount) || this.isManagedTocMount(mount);
 	}
 
+	isMountEnabledOnThisDevice(mount: MountPoint): boolean {
+		if (mount.deviceId === this.settings.deviceId) return true;
+		if (this.settings.allowForeignMounts) return true;
+		if (mount.deviceOverrides?.[this.settings.deviceId]) return true;
+		if (mount.fallbackRealPath) return true;
+		return false;
+	}
+
+	private async resolveMountPath(mount: MountPoint): Promise<void> {
+		if (this.isCloudMount(mount)) return;
+		if (mount.deviceOverrides?.[this.settings.deviceId]) return;
+		if (!mount.fallbackRealPath) return;
+
+		const primary = await checkPathAccessible(mount.realPath);
+		if (primary.accessible) {
+			this.pathMapper.clearResolvedPath(mount.id);
+			return;
+		}
+
+		const fallback = await checkPathAccessible(mount.fallbackRealPath);
+		if (fallback.accessible) {
+			this.pathMapper.setResolvedPath(mount.id, mount.fallbackRealPath);
+			logger.debug(`Folder Bridge: using fallback path "${mount.fallbackRealPath}" for "${mount.virtualPath}" (primary "${mount.realPath}" not accessible)`);
+		}
+	}
+
 	getTocWarnings(): string[] {
 		return [...this.tocWarnings];
 	}
 
 	private getManagedTocSourcePath(): string | null {
+		if (this.resolvedManagedTocSource) return this.resolvedManagedTocSource;
 		const sourcePath = this.settings.managedTocSource?.trim();
 		return sourcePath ? sourcePath : null;
+	}
+
+	async resolveAndCacheManagedTocSource(): Promise<void> {
+		const primary = this.settings.managedTocSource?.trim();
+		const fallback = this.settings.managedTocSourceFallback?.trim();
+
+		if (!primary && !fallback) {
+			this.resolvedManagedTocSource = '';
+			return;
+		}
+
+		if (primary) {
+			const resolved = await checkPathAccessible(primary);
+			if (resolved.accessible) {
+				this.resolvedManagedTocSource = primary;
+				return;
+			}
+		}
+
+		if (fallback) {
+			const resolved = await checkPathAccessible(fallback);
+			if (resolved.accessible) {
+				this.resolvedManagedTocSource = fallback;
+				logger.debug(`Folder Bridge: using fallback TOC source "${fallback}" (primary "${primary}" not accessible)`);
+				return;
+			}
+		}
+
+		this.resolvedManagedTocSource = primary || fallback || '';
 	}
 
 	private isManagedTocSource(sourcePath?: string): boolean {
@@ -198,12 +256,15 @@ export default class FolderBridgePlugin extends Plugin {
 		}
 
 		const previousSource = this.settings.managedTocSource;
+		const previousResolved = this.resolvedManagedTocSource;
 		this.settings.managedTocSource = trimmedPath;
+		this.resolvedManagedTocSource = trimmedPath;
 		this.settings.tocSources = this.settings.tocSources.filter(item => item.trim() !== trimmedPath);
 
 		try {
 			if (!await this.writeManagedTocMounts(this.getManagedTocDraftMounts())) {
 				this.settings.managedTocSource = previousSource;
+				this.resolvedManagedTocSource = previousResolved;
 				return false;
 			}
 			await this.refreshTocMountSources(true);
@@ -211,6 +272,7 @@ export default class FolderBridgePlugin extends Plugin {
 			return true;
 		} catch (error) {
 			this.settings.managedTocSource = previousSource;
+			this.resolvedManagedTocSource = previousResolved;
 			const message = error instanceof Error ? error.message : String(error);
 			new Notice(`Folder Bridge: Failed to initialize managed TOC file (${message}).`);
 			return false;
@@ -245,6 +307,7 @@ export default class FolderBridgePlugin extends Plugin {
 		this.persistedMountPoints.push(...this.getManagedTocDraftMounts());
 		this.managedTocMountPoints = [];
 		this.settings.managedTocSource = '';
+		this.resolvedManagedTocSource = '';
 		await this.refreshTocMountSources();
 		await this.saveSettings();
 		return true;
@@ -325,8 +388,8 @@ export default class FolderBridgePlugin extends Plugin {
 			...this.persistedAllowlist,
 			...effectiveMounts
 				.filter(m => !this.isCloudMount(m))
-				.map(m => this.effectiveRealPathForAllowlist(m))
-				.filter(Boolean),
+				.flatMap(m => [this.effectiveRealPathForAllowlist(m), m.fallbackRealPath])
+				.filter((resolvedPath): resolvedPath is string => !!resolvedPath),
 		]));
 
 		this.settings.mountPoints = effectiveMounts;
@@ -448,6 +511,9 @@ export default class FolderBridgePlugin extends Plugin {
 			for (const m of this.settings.mountPoints) {
 				if (m.enabled && m.realPath && !['webdav', 's3', 'sftp'].includes(m.mountType ?? '')) {
 					this.fileServer.addAllowedPath(m.realPath);
+					if (m.fallbackRealPath) {
+						this.fileServer.addAllowedPath(m.fallbackRealPath);
+					}
 				}
 			}
 			this.virtualAdapter?.setFileServer(this.fileServer);
@@ -735,7 +801,7 @@ export default class FolderBridgePlugin extends Plugin {
 			void (async () => {
 				// [BUGFIX_20260222] Removed debug log for resource path format
 
-				const activeMounts = this.settings.mountPoints.filter(m => m.enabled && (m.deviceId === this.settings.deviceId || this.settings.allowForeignMounts));
+				const activeMounts = this.settings.mountPoints.filter(m => m.enabled && this.isMountEnabledOnThisDevice(m));
 
 				// Register adapters for all active mounts — each type handled in its own branch.
 				for (const mount of activeMounts) {
@@ -794,7 +860,7 @@ export default class FolderBridgePlugin extends Plugin {
 			})();
 		});
 
-		logger.debug(`Folder Bridge Loaded (${getPlatform()}, ${this.settings.mountPoints.filter(m => m.enabled && (m.deviceId === this.settings.deviceId || this.settings.allowForeignMounts)).length} active mounts on this device)`);
+		logger.debug(`Folder Bridge Loaded (${getPlatform()}, ${this.settings.mountPoints.filter(m => m.enabled && this.isMountEnabledOnThisDevice(m)).length} active mounts on this device)`);
 	}
 
 	onunload() {
@@ -1060,11 +1126,12 @@ export default class FolderBridgePlugin extends Plugin {
 			// original FileSystemAdapter and fully delegates all unimplemented methods
 			// back to it, reporting its prototype is semantically accurate.
 			getPrototypeOf(target) {
-				const orig = (target as unknown as { orig?(): DataAdapter }).orig?.();
+				const origProvider = target as unknown as { orig?: () => DataAdapter };
+				const orig = origProvider.orig?.();
 				// eslint-disable-next-line @typescript-eslint/no-unsafe-return
 				return orig ? Object.getPrototypeOf(orig) : Object.getPrototypeOf(target);
 			},
-		}) as DataAdapter;
+		}) as unknown as DataAdapter;
 
 		// Obsidian's renderer calls Vault.getResourcePath(TFile) directly — it does NOT
 		// go through the adapter. We must also patch the vault-level method so that
@@ -1266,6 +1333,10 @@ export default class FolderBridgePlugin extends Plugin {
 			this.persistedAllowlist.push(mount.realPath);
 			this.security.allow(mount.realPath);
 		}
+		if (!isCloud && mount.fallbackRealPath && !this.persistedAllowlist.includes(mount.fallbackRealPath)) {
+			this.persistedAllowlist.push(mount.fallbackRealPath);
+			this.security.allow(mount.fallbackRealPath);
+		}
 
 		// Wire up WebDAV adapter
 		if (mount.mountType === 'webdav') {
@@ -1324,6 +1395,7 @@ export default class FolderBridgePlugin extends Plugin {
 
 		// Register the mount's real path with the streaming server (local mounts only)
 		if (!isCloud && runtimeMount.realPath) this.fileServer.addAllowedPath(runtimeMount.realPath);
+		if (!isCloud && runtimeMount.fallbackRealPath) this.fileServer.addAllowedPath(runtimeMount.fallbackRealPath);
 
 		backgroundTask(this.notifyVaultMountAdded(runtimeMount), `Failed to inject newly-added mount "${runtimeMount.virtualPath}" into the vault tree.`);
 
@@ -1473,9 +1545,10 @@ export default class FolderBridgePlugin extends Plugin {
 			const wasEnabled = oldMount.enabled;
 			const virtualPathChanged = normalizePath(oldMount.virtualPath) !== normalizePath(newData.virtualPath);
 			const realPathChanged = oldMount.realPath !== newData.realPath;
+			const fallbackChanged = (oldMount.fallbackRealPath ?? '') !== (newData.fallbackRealPath ?? '');
 			const visibleFileFilterChanged = oldMount.visibleFileFilter !== newData.visibleFileFilter;
 
-			if (wasEnabled && (virtualPathChanged || realPathChanged || visibleFileFilterChanged)) {
+			if (wasEnabled && (virtualPathChanged || realPathChanged || visibleFileFilterChanged || fallbackChanged)) {
 				await this.notifyVaultMountRemoved(oldMount);
 			}
 
@@ -1487,7 +1560,7 @@ export default class FolderBridgePlugin extends Plugin {
 			};
 
 			if (!await this.writeManagedTocMounts(nextManagedMounts)) {
-				if (wasEnabled && (virtualPathChanged || realPathChanged || visibleFileFilterChanged)) {
+				if (wasEnabled && (virtualPathChanged || realPathChanged || visibleFileFilterChanged || fallbackChanged)) {
 					await this.notifyVaultMountAdded(oldMount);
 				}
 				return;
@@ -1500,7 +1573,7 @@ export default class FolderBridgePlugin extends Plugin {
 			const updatedMount = this.settings.mountPoints.find(existing => existing.id === id);
 			if (!updatedMount) return;
 
-			if (wasEnabled && (virtualPathChanged || realPathChanged || visibleFileFilterChanged)) {
+			if (wasEnabled && (virtualPathChanged || realPathChanged || visibleFileFilterChanged || fallbackChanged)) {
 				await this.notifyVaultMountAdded(updatedMount);
 			}
 
@@ -1511,7 +1584,7 @@ export default class FolderBridgePlugin extends Plugin {
 				oldMount.watcherDebounceMs !== updatedMount.watcherDebounceMs ||
 				oldMount.watcherUsePolling !== updatedMount.watcherUsePolling ||
 				oldMount.watcherPollingIntervalMs !== updatedMount.watcherPollingIntervalMs;
-			if ((realPathChanged || watcherSettingsChanged) && wasEnabled) {
+			if ((realPathChanged || fallbackChanged || watcherSettingsChanged) && wasEnabled) {
 				this.fileWatcher?.stopWatching(oldMount);
 				this.fileWatcher?.startWatching(updatedMount);
 			}
@@ -1533,10 +1606,11 @@ export default class FolderBridgePlugin extends Plugin {
 		const wasEnabled = oldMount.enabled;
 		const virtualPathChanged = normalizePath(oldMount.virtualPath) !== normalizePath(newData.virtualPath);
 		const realPathChanged = oldMount.realPath !== newData.realPath;
+		const fallbackChanged = (oldMount.fallbackRealPath ?? '') !== (newData.fallbackRealPath ?? '');
 		const visibleFileFilterChanged = oldMount.visibleFileFilter !== newData.visibleFileFilter;
 
 		// Remove from vault tree before mutating PathMapper state
-		if (wasEnabled && (virtualPathChanged || realPathChanged || visibleFileFilterChanged)) {
+		if (wasEnabled && (virtualPathChanged || realPathChanged || visibleFileFilterChanged || fallbackChanged)) {
 			await this.notifyVaultMountRemoved(oldMount);
 		}
 
@@ -1558,6 +1632,20 @@ export default class FolderBridgePlugin extends Plugin {
 			}
 		}
 
+		if (fallbackChanged && !newIsCloud) {
+			if (oldMount.fallbackRealPath) {
+				const stillUsed = otherMounts.some(m => m.realPath === oldMount.fallbackRealPath || m.fallbackRealPath === oldMount.fallbackRealPath);
+				if (!stillUsed) {
+					this.persistedAllowlist = this.persistedAllowlist.filter(allowlistPath => allowlistPath !== oldMount.fallbackRealPath);
+					this.security.revoke(oldMount.fallbackRealPath);
+				}
+			}
+			if (newData.fallbackRealPath && !this.persistedAllowlist.includes(newData.fallbackRealPath)) {
+				this.persistedAllowlist.push(newData.fallbackRealPath);
+				this.security.allow(newData.fallbackRealPath);
+			}
+		}
+
 		// Preserve id, deviceId, ignoreList, and deviceOverrides from the original
 		this.persistedMountPoints[idx] = {
 			...oldMount,
@@ -1572,7 +1660,7 @@ export default class FolderBridgePlugin extends Plugin {
 		const updatedMount = this.persistedMountPoints[idx];
 
 		// Re-inject when enabled and something structural changed
-		if (wasEnabled && (virtualPathChanged || realPathChanged || visibleFileFilterChanged)) {
+		if (wasEnabled && (virtualPathChanged || realPathChanged || visibleFileFilterChanged || fallbackChanged)) {
 			backgroundTask(this.notifyVaultMountAdded(updatedMount), `Failed to refresh edited mount "${updatedMount.virtualPath}" in the vault tree.`);
 		}
 
@@ -1588,7 +1676,7 @@ export default class FolderBridgePlugin extends Plugin {
 			oldMount.watcherDebounceMs !== updatedMount.watcherDebounceMs ||
 			oldMount.watcherUsePolling !== updatedMount.watcherUsePolling ||
 			oldMount.watcherPollingIntervalMs !== updatedMount.watcherPollingIntervalMs;
-		if ((realPathChanged || watcherSettingsChanged) && wasEnabled) {
+		if ((realPathChanged || fallbackChanged || watcherSettingsChanged) && wasEnabled) {
 			this.fileWatcher?.stopWatching(oldMount);
 			this.fileWatcher?.startWatching(updatedMount);
 		}
@@ -1674,6 +1762,8 @@ export default class FolderBridgePlugin extends Plugin {
 	 * as a folder and inserts it into its internal TFolder tree.
 	 */
 	async notifyVaultMountAdded(mount: MountPoint): Promise<void> {
+		await this.resolveMountPath(mount);
+
 		const vault = this.app.vault as typeof this.app.vault & VaultInternal;
 
 		if (typeof vault.onChange !== 'function') {
@@ -1866,9 +1956,7 @@ export default class FolderBridgePlugin extends Plugin {
 			// Avoid churning I/O while Obsidian is in the background
 			if (typeof document !== 'undefined' && document.hidden) return;
 
-			const activeMounts = this.settings.mountPoints.filter(
-				m => m.enabled && (m.deviceId === this.settings.deviceId || this.settings.allowForeignMounts)
-			);
+			const activeMounts = this.settings.mountPoints.filter(m => m.enabled && this.isMountEnabledOnThisDevice(m));
 
 			let anyChanged = false;
 			for (const mount of activeMounts) {
@@ -1938,6 +2026,7 @@ export default class FolderBridgePlugin extends Plugin {
 				if (sftpAdapter) reachable = (await sftpAdapter.testConnection()) === null;
 			} else {
 				if (fs && fs.promises) {
+					await this.resolveMountPath(mount);
 					const realPath = this.pathMapper.getEffectiveRealPath(mount);
 					await fs.promises.access(realPath, fs.constants.F_OK);
 					reachable = true;
@@ -2025,6 +2114,7 @@ export default class FolderBridgePlugin extends Plugin {
 		const data = await this.loadData() as Record<string, unknown>;
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
 		this.settings.managedTocSource = this.settings.managedTocSource ?? '';
+		this.settings.managedTocSourceFallback = this.settings.managedTocSourceFallback ?? '';
 		this.persistedMountPoints = [...this.settings.mountPoints];
 		this.persistedAllowlist = [...this.settings.allowlist];
 
@@ -2052,6 +2142,7 @@ export default class FolderBridgePlugin extends Plugin {
 			delete legacySettings['ignoreList'];
 		}
 
+		await this.resolveAndCacheManagedTocSource();
 		this.syncEffectiveMountState();
 		await this.refreshTocMountSources();
 		await this.saveSettings();
@@ -2200,7 +2291,7 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 					void (async () => {
 						this.plugin.settings.allowForeignMounts = val;
 						await this.plugin.saveSettings();
-						this.display(); // Refresh to update toggle states
+						this.renderSync(); // Refresh to update toggle states
 					})();
 				}));
 
@@ -2323,7 +2414,7 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 					drop.setValue(this.selectedIgnoreMountId!);
 					drop.onChange(val => {
 						this.selectedIgnoreMountId = val;
-						this.display(); // Re-render to show the selected mount's list
+						this.renderSync(); // Re-render to show the selected mount's list
 					});
 				});
 
@@ -2432,6 +2523,7 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 		const renderManagedToc = () => {
 			managedTocContainer.empty();
 			const currentPath = this.plugin.settings.managedTocSource.trim();
+			const currentFallbackPath = this.plugin.settings.managedTocSourceFallback?.trim() ?? '';
 			const suggestedPath = this.plugin.getSuggestedManagedTocPath();
 			managedTocContainer.createEl('p', {
 				text: currentPath
@@ -2453,11 +2545,26 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 			});
 			inputEl.value = currentPath || suggestedPath || '';
 
+			const fallbackRow = managedTocContainer.createDiv('folderbridge-ignore-add');
+			const fallbackInputEl = fallbackRow.createEl('input', {
+				type: 'text',
+				placeholder: 'Fallback path for another device, e.g. C:\\Users\\me\\folderbridge.managed.json',
+			});
+			fallbackInputEl.value = currentFallbackPath;
+			fallbackInputEl.addEventListener('change', () => {
+				void (async () => {
+					this.plugin.settings.managedTocSourceFallback = fallbackInputEl.value.trim();
+					await this.plugin.resolveAndCacheManagedTocSource();
+					await this.plugin.saveSettings();
+					this.renderSync();
+				})();
+			});
+
 			const saveBtn = addRow.createEl('button', { text: currentPath ? 'Rebind' : 'Set' });
 			saveBtn.onclick = () => {
 				void (async () => {
 					if (await this.plugin.bindManagedTocSource(inputEl.value)) {
-						this.display();
+						this.renderSync();
 					}
 				})();
 			};
@@ -2473,7 +2580,7 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 						} else {
 							new Notice(`Folder Bridge: Created ${result.targetPath}. New local and vault mounts will be written there.`);
 						}
-						this.display();
+						this.renderSync();
 					})();
 				};
 			}
@@ -2483,7 +2590,7 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 				clearBtn.onclick = () => {
 					void (async () => {
 						await this.plugin.unbindManagedTocSource();
-						this.display();
+						this.renderSync();
 					})();
 				};
 
@@ -2496,7 +2603,7 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 						} else {
 							new Notice(`${this.plugin.manifest.name}: no local or vault UI mounts needed migration.`);
 						}
-						this.display();
+						this.renderSync();
 					})();
 				};
 			}
@@ -2542,7 +2649,7 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 						this.plugin.settings.tocSources = this.plugin.settings.tocSources.filter(item => item !== source);
 						await this.plugin.refreshTocMountSources(true);
 						await this.plugin.saveSettings();
-						this.display();
+						this.renderSync();
 					})();
 				};
 			}
@@ -2561,7 +2668,7 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 					await this.plugin.refreshTocMountSources(true);
 					await this.plugin.saveSettings();
 					inputEl.value = '';
-					this.display();
+					this.renderSync();
 				})();
 			};
 			inputEl.addEventListener('keypress', event => {
@@ -2586,7 +2693,7 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 						this.plugin.security,
 						async (mount) => {
 							await this.plugin.addMount(mount);
-							this.display();
+							this.renderSync();
 						},
 					).open();
 				}))
@@ -2637,9 +2744,10 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 							try {
 								const text = await file.text();
 								const parsed = JSON.parse(text) as unknown;
-								const mounts: MountPoint[] = Array.isArray(parsed)
-									? (parsed as MountPoint[])                        // legacy bare array
-									: (parsed as Record<string, unknown>).mountPoints ?? [];    // { version, mountPoints }
+								const parsedMounts = Array.isArray(parsed)
+									? parsed
+									: (parsed as Record<string, unknown>).mountPoints;
+								const mounts = Array.isArray(parsedMounts) ? parsedMounts as MountPoint[] : [];
 								if (!Array.isArray(mounts) || mounts.length === 0) {
 									new Notice(`${this.plugin.manifest.name}: no mount points found in the selected file.`);
 									return;
@@ -2670,7 +2778,7 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 									added++;
 								}
 								new Notice(`Folder Bridge: Imported ${added} mount(s).${skipped ? ` ${skipped} skipped (invalid).` : ''}`);
-								this.display();
+								this.renderSync();
 							} catch {
 								new Notice(`${this.plugin.manifest.name}: failed to parse the selected file. Is it a valid Folder Bridge export?`);
 							}
@@ -2697,13 +2805,16 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 	/** Render a single mount row synchronously, then patch status asynchronously. */
 	private renderMountRow(containerEl: HTMLElement, mount: MountPoint): void {
 		const isThisDevice = mount.deviceId === this.plugin.settings.deviceId;
-		const canEnable = isThisDevice || this.plugin.settings.allowForeignMounts;
+		const canEnable = this.plugin.isMountEnabledOnThisDevice(mount);
 		const isTocManaged = this.plugin.isTocManagedMount(mount);
 		const isManagedToc = this.plugin.isManagedTocMount(mount);
 		const isUserEditable = this.plugin.isUserEditableMount(mount);
 		const displayName = mount.label || mount.virtualPath;
 
 		let desc = `${normalizePath(mount.virtualPath)} → ${mount.realPath}`;
+		if (mount.fallbackRealPath) {
+			desc += `\n(Fallback path: ${mount.fallbackRealPath})`;
+		}
 		if (isTocManaged) {
 			desc += isManagedToc
 				? `\n(Managed TOC file: ${mount.tocSourcePath})`
@@ -2784,7 +2895,7 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 								return;
 							}
 							await this.plugin.setMountReadOnly(mount.id, !mount.readOnly);
-							this.display();
+							this.renderSync();
 						})();
 					});
 				if (mount.readOnly) {
@@ -2815,7 +2926,7 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 								this.plugin.fileWatcher?.stopWatching(mount);
 								this.plugin.fileWatcher?.startWatching(mount);
 							}
-							this.display();
+							this.renderSync();
 							new Notice(`${this.plugin.manifest.name}: path overridden for this device.`);
 						}
 					})();
@@ -2840,7 +2951,7 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 							if (editId) {
 								await this.plugin.updateMount(editId, updatedData);
 							}
-							this.display();
+							this.renderSync();
 						},
 						mount, // pre-populate all fields
 					).open();
@@ -2850,11 +2961,11 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 		if (isUserEditable) {
 			setting.addButton(btn => btn
 				.setButtonText('Remove')
-				.setWarning()
+				.setDestructive()
 				.onClick(() => {
 					void (async () => {
 						await this.plugin.removeMount(mount.id);
-						this.display();
+						this.renderSync();
 					})();
 				}));
 		}
@@ -2914,18 +3025,18 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 			const [moved] = mounts.splice(srcIdx, 1);
 			mounts.splice(dstIdx, 0, moved);
 
-			void this.plugin.saveSettings().then(() => this.display());
+			void this.plugin.saveSettings().then(() => this.renderSync());
 		});
 
 		// ── Reconnect button (shown immediately when mount is known unreachable) ────
 		if (canEnable && this.plugin.mountHealthMap.get(mount.id) === false) {
 			setting.addButton(btn => btn
 				.setButtonText('Reconnect')
-				.setWarning()
+				.setDestructive()
 				.onClick(() => {
 					void (async () => {
 						await this.plugin.reconnectMount(mount);
-						this.display();
+						this.renderSync();
 					})();
 				}));
 		}

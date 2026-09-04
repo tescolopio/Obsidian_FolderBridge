@@ -55,3 +55,57 @@ describe('VirtualAdapter delete notifications', () => {
         await expect(fs.stat(path.join(tempDir, 'note.md'))).rejects.toMatchObject({ code: 'ENOENT' });
     });
 });
+
+describe('VirtualAdapter cachedRead', () => {
+    it('reads mounted files through the mounted path instead of the original adapter cache', async () => {
+        const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'folderbridge-va-'));
+        const mount = makeMount(tempDir);
+        const mapper = new PathMapper();
+        mapper.update([mount], 'test-device');
+        const security = new SecurityManager([tempDir]);
+        const original = {
+            cachedRead: vi.fn().mockResolvedValue('wrong source'),
+            read: vi.fn().mockResolvedValue('wrong source'),
+        };
+        const adapter = new VirtualAdapter(
+            original,
+            mapper,
+            security,
+            false,
+            10 * 1024 * 1024,
+            async () => 'delete',
+            async () => { },
+            () => false,
+        );
+
+        try {
+            await fs.writeFile(path.join(tempDir, 'note.md'), 'mounted content');
+            await expect(adapter.cachedRead('Mounted/note.md')).resolves.toBe('mounted content');
+            expect(original.cachedRead).not.toHaveBeenCalled();
+        } finally {
+            await fs.rm(tempDir, { recursive: true, force: true });
+        }
+    });
+
+    it('falls back to the original adapter cachedRead for non-mounted files', async () => {
+        const original = {
+            cachedRead: vi.fn().mockResolvedValue('vault content'),
+            read: vi.fn().mockResolvedValue('vault content'),
+        };
+        const mapper = new PathMapper();
+        mapper.update([], 'test-device');
+        const adapter = new VirtualAdapter(
+            original,
+            mapper,
+            new SecurityManager([]),
+            false,
+            10 * 1024 * 1024,
+            async () => 'delete',
+            async () => { },
+            () => false,
+        );
+
+        await expect(adapter.cachedRead('vault/note.md')).resolves.toBe('vault content');
+        expect(original.cachedRead).toHaveBeenCalledWith('vault/note.md');
+    });
+});

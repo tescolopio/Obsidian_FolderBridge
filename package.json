@@ -1,6 +1,6 @@
 {
     "name": "folderbridge",
-    "version": "2.15.3",
+    "version": "2.15.4",
     "description": "Adds external folders to your vault as seamless, native-feeling directories. Creates virtual mount points that map real filesystem paths into the vault.",
     "main": "main.js",
     "scripts": {
@@ -32,7 +32,7 @@
         "esbuild": "0.27.3",
         "eslint": "^10.2.0",
         "eslint-plugin-obsidianmd": "^0.1.9",
-        "obsidian": "^1.12.0",
+        "obsidian": "^1.13.1",
         "tslib": "2.6.2",
         "typescript": "5.3.3",
         "typescript-eslint": "^8.56.0",

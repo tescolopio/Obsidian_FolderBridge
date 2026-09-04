@@ -63,6 +63,18 @@ describe('OSHelpers', () => {
 				expect(result).toBe(result.toLowerCase());
 			});
 		});
+
+		it('trims a non-root trailing separator on Windows', () => {
+			withPlatform('win32', () => {
+				expect(normalizeForComparison('C:\\foo\\bar\\')).toBe('c:/foo/bar');
+			});
+		});
+
+		it('preserves the trailing separator for a Windows filesystem root', () => {
+			withPlatform('win32', () => {
+				expect(normalizeForComparison('C:\\')).toBe('c:/');
+			});
+		});
 	});
 
 	describe('isUNCPath', () => {
