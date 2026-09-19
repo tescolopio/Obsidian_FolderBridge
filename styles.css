@@ -163,6 +163,33 @@
     width: 100%;
 }
 
+.folderbridge-path-setting {
+    flex-direction: column;
+    align-items: stretch;
+}
+
+.folderbridge-path-setting .setting-item-info {
+    margin-inline-end: 0;
+}
+
+.folderbridge-path-setting .setting-item-control {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.folderbridge-path-setting .folderbridge-input-flex {
+    flex: 1 1 240px;
+    min-width: min(240px, 100%);
+    max-width: 100%;
+}
+
+.folderbridge-path-setting button {
+    flex-shrink: 0;
+    max-width: 100%;
+}
+
 .folderbridge-input-narrow {
     width: 80px !important;
 }

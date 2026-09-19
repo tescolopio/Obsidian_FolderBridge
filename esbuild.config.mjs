@@ -53,7 +53,7 @@ const optionalNodeModulesPlugin = {
 	name: 'optional-node-modules',
 	setup(build) {
 		build.onResolve({ filter: /^\.\/optionalNodeModules$/ }, args => {
-			if (!args.importer.endsWith('/src/runtimeNode.ts')) {
+			if (!args.importer.replace(/\\/g, '/').endsWith('/src/runtimeNode.ts')) {
 				return null;
 			}
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SubmitStateController } from '../src/ui/SubmitStateController';
+import { shouldUseFolderNameAsLabel } from '../src/ui/mountLabel';
 
 describe('SubmitStateController', () => {
     it('starts idle and exposes the idle label', () => {
@@ -27,5 +28,19 @@ describe('SubmitStateController', () => {
         expect(controller.isBusy()).toBe(false);
         expect(controller.currentLabel()).toBe('Save changes');
         expect(controller.tryBegin()).toBe(true);
+    });
+});
+
+describe('shouldUseFolderNameAsLabel', () => {
+    it('returns true when the saved label matches the folder basename', () => {
+        expect(shouldUseFolderNameAsLabel('/home/user/Documents', 'Documents')).toBe(true);
+    });
+
+    it('returns false when the saved label is custom', () => {
+        expect(shouldUseFolderNameAsLabel('/home/user/Documents', 'Work docs')).toBe(false);
+    });
+
+    it('returns false when the label is empty', () => {
+        expect(shouldUseFolderNameAsLabel('/home/user/Documents', '')).toBe(false);
     });
 });

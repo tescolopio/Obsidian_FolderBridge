@@ -39,20 +39,23 @@ type SafeStorage = {
     decryptString(encrypted: Buffer): string;
 };
 
+type ElectronModule = {
+	safeStorage?: SafeStorage;
+	remote?: {
+		safeStorage?: SafeStorage;
+	};
+};
+
 function getSafeStorage(): SafeStorage | null {
-    try {
-        const runtimeRequire = getRuntimeRequire();
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        const electron = runtimeRequire?.('electron');
-        const remote = (electron as Record<string, unknown>)?.remote as Record<string, unknown> | undefined;
-        // safeStorage lives in the main process; Obsidian re-exports it via remote.
-        const ss: SafeStorage | undefined =
-            (remote?.safeStorage as SafeStorage | undefined) ??
-            ((electron as Record<string, unknown>)?.safeStorage as SafeStorage | undefined);
-        return ss ?? null;
-    } catch {
-        return null;
-    }
+	try {
+		const runtimeRequire = getRuntimeRequire();
+		const electron = runtimeRequire?.('electron') as ElectronModule | undefined;
+		// safeStorage lives in the main process; Obsidian re-exports it via remote.
+		const safeStorage = electron?.remote?.safeStorage ?? electron?.safeStorage;
+		return safeStorage ?? null;
+	} catch {
+		return null;
+	}
 }
 
 // ---------------------------------------------------------------------------

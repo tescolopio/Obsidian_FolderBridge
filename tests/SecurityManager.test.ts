@@ -48,6 +48,15 @@ describe('SecurityManager', () => {
 			expect(sec.isAllowed('/new/path/file.txt')).toBe(true);
 		});
 
+		it('allows child paths when the allowlisted path has a trailing separator', () => {
+			withPlatform('win32', () => {
+				const secTrailing = new SecurityManager(['C:\\foo\\bar\\']);
+				expect(secTrailing.isAllowed('C:\\foo\\bar\\README.md')).toBe(true);
+				expect(secTrailing.isAllowed('C:\\foo\\bar\\sub\\file.txt')).toBe(true);
+				expect(secTrailing.isAllowed('C:\\foo\\bar')).toBe(true);
+			});
+		});
+
 		it('revokes an allowlisted path', () => {
 			sec.revoke('/allowed/path');
 			expect(sec.isAllowed('/allowed/path')).toBe(false);
@@ -61,6 +70,120 @@ describe('SecurityManager', () => {
 	});
 
 	describe('validateMount', () => {
+		describe.each(['linux', 'darwin'] as const)('POSIX host protection on %s', platform => {
+			it.each([
+				'//etc/ssh',
+				'///etc/ssh',
+				'//home/Notes/../../etc/ssh',
+				'//home/Notes/../..',
+			])('blocks protected primary and fallback path %s', candidate => {
+				withPlatform(platform, () => {
+					expect(sec.validateMount(mkMount('Protected', candidate), [])).toMatch(/protected/i);
+					expect(sec.validateMount({ ...mkMount('Notes', '/home/user/Notes'), fallbackRealPath: candidate }, [])).toMatch(/protected.*fallback/i);
+				});
+			});
+
+			it.each(['/home/user/Notes', '//home/user/Notes', '///home/user/Notes', '//etc-backup/Notes', '//ETC/ssh'])('preserves safe path %s', candidate => {
+				withPlatform(platform, () => {
+					expect(sec.validateMount(mkMount('Notes', candidate), [])).toBeNull();
+					expect(sec.validateMount({ ...mkMount('Notes', '/home/user/Notes'), fallbackRealPath: candidate }, [])).toBeNull();
+				});
+			});
+
+			it('does not widen a POSIX allowlist through UNC normalization or case folding', () => {
+				withPlatform(platform, () => {
+					const posixAllowlist = new SecurityManager(['/home/user/Notes']);
+					expect(posixAllowlist.isAllowed('///home/user/Notes/file.md')).toBe(true);
+					for (const candidate of ['//home/user/notes/file.md', '///home/user/notes/file.md', '//home/user/Notes/../../private/file.md']) {
+						expect(posixAllowlist.isAllowed(candidate)).toBe(false);
+					}
+				});
+			});
+		});
+
+		describe.each(['linux', 'win32', 'darwin'] as const)('cross-host validation on %s', platform => {
+			it.each([
+				'C:\\Windows\\System32',
+				'C:/Windows/System32',
+				'\\\\?\\C:\\Windows\\System32',
+				'//?/C:/Windows/System32',
+				'C:\\Notes\\..\\Windows\\System32',
+				'c:\\PROGRAM FILES\\App',
+				'\\\\?\\C:\\Program Files (x86)\\App',
+				'\\\\?\\C:\\',
+			])('blocks protected primary and fallback path %s', candidate => {
+				withPlatform(platform, () => {
+					expect(sec.validateMount(mkMount('Protected', candidate), [])).toMatch(/protected/i);
+					expect(sec.validateMount({ ...mkMount('Notes', '/home/user/Notes'), fallbackRealPath: candidate }, [])).toMatch(/protected.*fallback/i);
+				});
+			});
+
+			it.each([
+				'\\\\.\\C:\\Windows\\System32',
+				'\\\\?\\GLOBALROOT\\Device\\HarddiskVolume1\\Windows',
+				'\\\\?\\Volume{test}\\Windows',
+				'\\??\\C:\\Windows\\System32',
+				'\\\\?\\UNC\\server',
+			])('rejects unsupported device path %s', candidate => {
+				withPlatform(platform, () => {
+					expect(sec.validateMount(mkMount('Device', candidate), [])).toMatch(/unsupported.*device/i);
+					expect(sec.validateMount({ ...mkMount('Notes', '/home/user/Notes'), fallbackRealPath: candidate }, [])).toMatch(/fallback.*unsupported.*device/i);
+					const deviceAllowlist = new SecurityManager([candidate]);
+					expect(deviceAllowlist.isAllowed(candidate)).toBe(false);
+				});
+			});
+
+			it.each(['wsl$', 'wsl.localhost', 'server'])('preserves UNC mounts and boundaries for %s', host => {
+				withPlatform(platform, () => {
+					const realPath = `\\\\${host}\\Ubuntu\\home\\Notes`;
+					const extended = `\\\\?\\UNC\\${host}\\Ubuntu\\home\\Notes`;
+					const forward = `//${host}/Ubuntu/home/Notes`;
+					for (const candidate of [realPath, extended, forward]) {
+						expect(sec.validateMount(mkMount('Notes', candidate), [])).toBeNull();
+						expect(sec.validateMount({ ...mkMount('Notes', '/home/user/Notes'), fallbackRealPath: candidate }, [])).toBeNull();
+						const uncAllowlist = new SecurityManager([`${candidate}/`]);
+						expect(uncAllowlist.isAllowed(`${realPath}\\file.md`)).toBe(true);
+						expect(uncAllowlist.isAllowed(`${extended}\\file.md`)).toBe(true);
+						expect(uncAllowlist.isAllowed(`${forward}/file.md`)).toBe(true);
+						expect(uncAllowlist.isAllowed(`${extended}-other\\file.md`)).toBe(false);
+						expect(uncAllowlist.isAllowed(`${extended}\\..\\private\\file.md`)).toBe(false);
+					}
+				});
+			});
+
+			it('preserves ordinary folders and drive allowlist boundaries', () => {
+				withPlatform(platform, () => {
+					for (const candidate of ['C:\\Notes\\', 'C:/Windows-old/Notes', 'C:\\Program Files-other', '/home/user/Notes', '/etc-backup']) {
+						expect(sec.validateMount(mkMount('Notes', candidate), [])).toBeNull();
+					}
+					const driveAllowlist = new SecurityManager(['C:\\Notes\\']);
+					expect(driveAllowlist.isAllowed('\\\\?\\C:\\Notes\\file.md')).toBe(true);
+					expect(driveAllowlist.isAllowed('c:/notes/file.md')).toBe(true);
+					expect(driveAllowlist.isAllowed('\\\\?\\C:\\Notes-other\\file.md')).toBe(false);
+					expect(driveAllowlist.isAllowed('C:\\Notes\\..\\private\\file.md')).toBe(false);
+					driveAllowlist.revoke('\\\\?\\C:\\Notes');
+					expect(driveAllowlist.isAllowed('C:\\Notes')).toBe(false);
+				});
+			});
+
+			it('does not turn an unsupported device allowlist entry into an ordinary path', () => {
+				withPlatform(platform, () => {
+					const deviceAllowlist = new SecurityManager(['\\\\?\\UNC\\server']);
+					expect(deviceAllowlist.isAllowed('/server')).toBe(false);
+				});
+			});
+
+			it('keeps filesystem roots exact-only in the allowlist', () => {
+				withPlatform(platform, () => {
+					for (const root of ['/', 'C:/', '//server/share/']) {
+						const rootAllowlist = new SecurityManager([root]);
+						expect(rootAllowlist.isAllowed(root)).toBe(true);
+						expect(rootAllowlist.isAllowed(`${root}child`)).toBe(false);
+					}
+				});
+			});
+		});
+
 		it('returns null for a valid mount', () => {
 			expect(sec.validateMount(mkMount('Work', '/home/user/Work'), [])).toBeNull();
 		});
@@ -77,6 +200,20 @@ describe('SecurityManager', () => {
 			expect(sec.validateMount(mkMount('Work', 'relative/path'), [])).toMatch(/absolute/i);
 		});
 
+		it('rejects a non-absolute fallback real path', () => {
+			expect(sec.validateMount({ ...mkMount('Work', '/home/user/Work'), fallbackRealPath: 'relative/fallback' }, [])).toMatch(/fallback.*absolute/i);
+		});
+
+		it.each(['wsl$', 'wsl.localhost'])('allows WSL UNC paths through %s on Windows without allowing siblings', host => {
+			withPlatform('win32', () => {
+				const realPath = `\\\\${host}\\Ubuntu\\home\\obsidian-private`;
+				expect(sec.validateMount(mkMount('WSL Notes', realPath), [])).toBeNull();
+				sec.allow(`${realPath}\\`);
+				expect(sec.isAllowed(`${realPath}\\note.md`)).toBe(true);
+				expect(sec.isAllowed(`${realPath}-other\\note.md`)).toBe(false);
+			});
+		});
+
 		it('blocks the POSIX system root /', () => {
 			expect(sec.validateMount(mkMount('Root', '/'), [])).toMatch(/protected/i);
 		});
@@ -87,6 +224,10 @@ describe('SecurityManager', () => {
 
 		it('blocks /etc subdirectories', () => {
 			expect(sec.validateMount(mkMount('Ssl', '/etc/ssl'), [])).toMatch(/protected/i);
+		});
+
+		it('blocks dangerous fallback paths like /etc', () => {
+			expect(sec.validateMount({ ...mkMount('Work', '/home/user/Work'), fallbackRealPath: '/etc' }, [])).toMatch(/protected.*fallback/i);
 		});
 
 		it('rejects a duplicate virtual path', () => {

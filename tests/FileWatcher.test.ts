@@ -144,6 +144,75 @@ describe('FileWatcher', () => {
     // ── stopWatching ───────────────────────────────────────────────────────────
 
     describe('stopWatching', () => {
+        it('ignores old-root events after the active mapper entry changes', async () => {
+            const { app, mockOnChange, mockGetAbstractFileByPath } = makeApp();
+            mockGetAbstractFileByPath.mockReturnValue({});
+            const mapper = makeMapper(mount);
+            const watcher = new FileWatcher(app, mapper, () => false);
+            watcher.startWatching(mount);
+            mapper.update([{ ...mount, realPath: '/new-root' }], 'test-device');
+            await getCallback('unlinkDir')(mount.realPath);
+            expect(mockOnChange).not.toHaveBeenCalled();
+            watcher.stopAll();
+        });
+
+        it('ignores callbacks from a stopped watcher after a root replacement', async () => {
+            const { app, mockOnChange, mockGetAbstractFileByPath } = makeApp();
+            mockGetAbstractFileByPath.mockReturnValue({});
+            const mapper = makeMapper(mount);
+            const watcher = new FileWatcher(app, mapper, () => false);
+            watcher.startWatching(mount);
+            const staleUnlink = getCallback('unlink');
+            const updated = { ...mount, realPath: '/new-root' };
+            watcher.stopWatching(mount);
+            mapper.update([updated], 'test-device');
+            watcher.startWatching(updated);
+
+            await staleUnlink(`${mount.realPath}/old.md`);
+            expect(mockOnChange).not.toHaveBeenCalled();
+            watcher.stopAll();
+        });
+
+        it('cancels pending debounced events for the stopped mount', async () => {
+            vi.useFakeTimers();
+            try {
+                const { app, mockOnChange, mockGetAbstractFileByPath } = makeApp();
+                mockGetAbstractFileByPath.mockReturnValue({});
+                const watcher = new FileWatcher(app, makeMapper(mount), () => false);
+                watcher.startWatching(mount);
+                await getCallback('change')(`${mount.realPath}/old.md`);
+                watcher.stopWatching(mount);
+                expect(vi.getTimerCount()).toBe(0);
+                await vi.runAllTimersAsync();
+                expect(mockOnChange).not.toHaveBeenCalled();
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it('drops a pending stat result after the watcher is stopped', async () => {
+            const { app, mockOnChange, mockStat } = makeApp();
+            let finishStat!: (value: { size: number; ctime: number; mtime: number }) => void;
+            mockStat.mockImplementation(() => new Promise(resolve => { finishStat = resolve; }));
+            const watcher = new FileWatcher(app, makeMapper(mount), () => false);
+            watcher.startWatching(mount);
+            await getCallback('add')(`${mount.realPath}/old.md`);
+            watcher.stopWatching(mount);
+            finishStat({ size: 1, ctime: 0, mtime: 0 });
+            await Promise.resolve();
+            expect(mockOnChange).not.toHaveBeenCalled();
+        });
+
+        it('does not translate out-of-root events into mount-root removals', async () => {
+            const { app, mockOnChange, mockGetAbstractFileByPath } = makeApp();
+            mockGetAbstractFileByPath.mockReturnValue({});
+            const watcher = new FileWatcher(app, makeMapper(mount), () => false);
+            watcher.startWatching(mount);
+            await getCallback('unlinkDir')(`${mount.realPath}-other`);
+            expect(mockOnChange).not.toHaveBeenCalled();
+            watcher.stopAll();
+        });
+
         it('closes the watcher for the given mount', () => {
             const { app } = makeApp();
             const fw = new FileWatcher(app, makeMapper(mount), () => false);
@@ -187,24 +256,44 @@ describe('FileWatcher', () => {
     // ── ignored callback ───────────────────────────────────────────────────────
 
     describe('ignored callback', () => {
-        function getIgnored(): (p: string) => boolean {
+        function getIgnored(isIgnored: (name: string, mount: MountPoint, relativePath?: string) => boolean = () => false): (p: string) => boolean {
             const { app } = makeApp();
-            const fw = new FileWatcher(app, makeMapper(mount), () => false);
+            const fw = new FileWatcher(app, makeMapper(mount), isIgnored);
             fw.startWatching(mount);
             const options = getWatchOptions();
             if (!options.ignored) throw new Error('Expected ignored callback to be registered');
             return options.ignored;
         }
 
-        it('ignores hidden files (name starts with .)', () => {
-            const ignored = getIgnored();
+        it('honors configured hidden-file exclusions', () => {
+            const ignored = getIgnored(name => name === '.git' || name === '.DS_Store');
             expect(ignored('C:/Users/test/Documents/.git')).toBe(true);
             expect(ignored('C:/Users/test/Documents/.DS_Store')).toBe(true);
         });
 
-        it('ignores node_modules', () => {
-            const ignored = getIgnored();
+        it('honors a configured node_modules exclusion', () => {
+            const ignored = getIgnored(name => name === 'node_modules');
             expect(ignored('C:/Users/test/Documents/node_modules')).toBe(true);
+        });
+
+        it('allows dot-prefixed paths when not excluded', () => {
+            const ignored = getIgnored();
+            expect(ignored('C:/Users/test/Documents/.env')).toBe(false);
+            expect(ignored('C:/Users/test/Documents/.obsidian_link')).toBe(false);
+        });
+
+        it('watches a dot-prefixed mount root and forwards relative ignore paths', () => {
+            const hiddenMount = mkMount('hidden', 'docs', '/tmp/.notes');
+            const { app } = makeApp();
+            const isIgnored = vi.fn((_name: string, _mount: MountPoint, relativePath?: string) => relativePath === 'assets/vendor');
+            const watcher = new FileWatcher(app, makeMapper(hiddenMount), isIgnored);
+            watcher.startWatching(hiddenMount);
+            const ignored = getWatchOptions().ignored!;
+
+            expect(ignored('/tmp/.notes')).toBe(false);
+            expect(ignored('/tmp/.notes/assets/vendor')).toBe(true);
+            expect(isIgnored).toHaveBeenCalledWith('vendor', hiddenMount, 'assets/vendor');
+            expect(ignored('/tmp/.notes/docs/vendor')).toBe(false);
         });
 
         it('does not ignore regular files', () => {

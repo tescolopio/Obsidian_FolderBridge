@@ -51,6 +51,37 @@ describe('OSHelpers', () => {
 	});
 
 	describe('normalizeForComparison', () => {
+		describe.each(['linux', 'darwin'] as const)('ambiguous forward slashes on %s', platform => {
+			it('retains UNC comparison syntax without changing unambiguous POSIX case', () => {
+				withPlatform(platform, () => {
+					expect(normalizeForComparison('//etc/ssh')).toBe('//etc/ssh/');
+					expect(normalizeForComparison('///etc/ssh')).toBe('/etc/ssh');
+					expect(normalizeForComparison('///home/user/Notes/')).toBe('/home/user/Notes');
+					expect(normalizeForComparison('//server/share/Notes/')).toBe(normalizeForComparison('\\\\server\\share\\Notes\\'));
+				});
+			});
+		});
+
+		describe.each(['linux', 'win32', 'darwin'] as const)('Windows candidates on %s', platform => {
+			it.each([
+				['C:\\Windows\\System32', 'c:/windows/system32'],
+				['C:/Windows/System32/', 'c:/windows/system32'],
+				['\\\\?\\C:\\Windows\\System32', 'c:/windows/system32'],
+				['C:\\Notes/child\\..\\file.md', 'c:/notes/file.md'],
+				['\\\\server\\share\\Notes\\', '//server/share/notes'],
+				['//server/share/Notes/', '//server/share/notes'],
+				['\\\\?\\UNC\\server\\share\\Notes\\', '//server/share/notes'],
+				['C:\\', 'c:/'],
+				['\\\\?\\C:\\', 'c:/'],
+				['\\\\server\\share\\', '//server/share/'],
+				['\\\\?\\UNC\\server\\share\\', '//server/share/'],
+			])('canonicalizes %s', (candidate, expected) => {
+				withPlatform(platform, () => {
+					expect(normalizeForComparison(candidate)).toBe(expected);
+				});
+			});
+		});
+
 		it('preserves case on Linux', () => {
 			withPlatform('linux', () => {
 				expect(normalizeForComparison('/Foo/Bar')).toBe('/Foo/Bar');
@@ -61,6 +92,18 @@ describe('OSHelpers', () => {
 			withPlatform('win32', () => {
 				const result = normalizeForComparison('C:\\Users\\NAME');
 				expect(result).toBe(result.toLowerCase());
+			});
+		});
+
+		it('trims a non-root trailing separator on Windows', () => {
+			withPlatform('win32', () => {
+				expect(normalizeForComparison('C:\\foo\\bar\\')).toBe('c:/foo/bar');
+			});
+		});
+
+		it('preserves the trailing separator for a Windows filesystem root', () => {
+			withPlatform('win32', () => {
+				expect(normalizeForComparison('C:\\')).toBe('c:/');
 			});
 		});
 	});

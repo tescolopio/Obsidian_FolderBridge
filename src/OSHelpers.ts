@@ -306,16 +306,36 @@ export function tryReadAsDataUri(realPath: string, maxBytes = MAX_SYNC_DATA_URI_
 // ---------------------------------------------------------------------------
 
 /**
- * Normalize a path for equality comparison.  On Windows (case-insensitive
- * NTFS) this lowercases the result so that 'C:\Docs' and 'c:\docs' are
- * treated as the same path.  On POSIX systems the case is preserved.
+ * Normalize a path for equality comparison using the candidate's dialect.
+ * Windows drive and UNC paths compare case-insensitively on every host;
+ * POSIX paths preserve case. Supported extended prefixes compare identically
+ * to their ordinary filesystem forms.
  */
 export function normalizeForComparison(p: string): string {
-	let n = path.normalize(p);
-	if (getPlatform() !== 'windows' && path.sep === '\\') {
-		n = n.replace(/\\/g, '/');
+	if (isUnsupportedWindowsDevicePath(p)) return p;
+	const windowsStyle = /^[a-zA-Z]:[\\/]/.test(p) || /^[\\/]{2}[^\\/]/.test(p);
+	if (windowsStyle || (getPlatform() === 'windows' && !p.startsWith('/'))) {
+		const ordinaryPath = p.replace(/\//g, '\\')
+			.replace(/^\\\\\?\\([a-zA-Z]:\\)/, '$1')
+			.replace(/^\\\\\?\\UNC\\/i, '\\\\');
+		const normalized = path.win32.normalize(ordinaryPath);
+		const root = path.win32.parse(normalized).root;
+		const trimmed = normalized !== root ? normalized.replace(/[\\/]+$/, '') : normalized;
+		return trimmed.replace(/\\/g, '/').toLowerCase();
 	}
-	return getPlatform() === 'windows' ? n.toLowerCase() : n;
+
+	const normalized = path.posix.normalize(p);
+	const root = path.posix.parse(normalized).root;
+	return normalized !== root ? normalized.replace(/\/+$|\/+$/g, '') : normalized;
+}
+
+export function isUnsupportedWindowsDevicePath(candidatePath: string): boolean {
+	const windowsPath = candidatePath.replace(/\//g, '\\');
+	if (/^\\{1,2}\?\?\\/.test(windowsPath) || windowsPath.startsWith('\\\\.\\')) return true;
+	if (!windowsPath.startsWith('\\\\?\\')) return false;
+	if (/^\\\\\?\\[a-zA-Z]:\\/.test(windowsPath)) return false;
+	const unc = windowsPath.match(/^\\\\\?\\UNC\\([^\\]+)\\([^\\]+)(?:\\|$)/i);
+	return !unc || unc.slice(1).some(segment => segment === '.' || segment === '..');
 }
 
 /**

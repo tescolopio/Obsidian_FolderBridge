@@ -9,6 +9,25 @@ export function normalizePath(p: string): string {
 		.replace(/\/+$/, '');   // no trailing slash
 }
 
+export class Notice {
+	constructor(public message: string, public timeout?: number) { }
+	hide(): void { }
+}
+
+export class Plugin {
+	constructor(public app: unknown, public manifest: unknown) { }
+}
+export class PluginSettingTab { }
+export class Modal { }
+export class SuggestModal { }
+export class FuzzySuggestModal { }
+export class TFile {
+	path = '';
+}
+export class TFolder extends TFile {
+	children: TFile[] = [];
+}
+
 /** Platform stub — always simulates desktop in unit tests. */
 export const Platform = {
 	isMobile: false,

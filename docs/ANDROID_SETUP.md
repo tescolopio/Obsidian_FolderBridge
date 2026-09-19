@@ -52,7 +52,14 @@ Use the URL your server admin provides. It must start with `http://` or `https:/
 
 ## Step 2 — Install FolderBridge
 
-Settings → **Community Plugins** → Browse → search **Folder Bridge** → Install → Enable
+Folder Bridge is not currently listed in Obsidian's Community Plugins directory.
+
+1. Install and enable **Obsidian42 - BRAT** from **Settings → Community Plugins → Browse**.
+2. Run **BRAT: Add a beta plugin for testing** from the command palette.
+3. Enter `https://github.com/tescolopio/Obsidian_FolderBridge` and tap **Add Plugin**.
+4. Enable Folder Bridge in **Settings → Community Plugins**.
+
+BRAT installs a published GitHub release, not unreleased fixes on a development branch. Android loading failures are still being investigated in [issue #18](https://github.com/tescolopio/Obsidian_FolderBridge/issues/18). If enabling fails, include the installed plugin version and, when possible, the WebView console error in that issue.
 
 ---
 

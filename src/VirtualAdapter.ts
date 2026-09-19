@@ -721,6 +721,7 @@ export class VirtualAdapter {
 				await fs.promises.mkdir(path.dirname(realPath), { recursive: true });
 				await fs.promises.writeFile(realPath, Buffer.from(data));
 				void this.onModify?.(normalizedPath).catch(() => { });
+				return;
 			} catch (e) {
 				throw new Error(`Folder Bridge: ${translateFsError(e as NodeJS.ErrnoException, 'writeBinary')}`);
 			}
@@ -761,11 +762,33 @@ export class VirtualAdapter {
 			try {
 				await fs.promises.appendFile(realPath, data, 'utf8');
 				void this.onModify?.(normalizedPath).catch(() => { });
+				return;
 			} catch (e) {
 				throw new Error(`Folder Bridge: ${translateFsError(e as NodeJS.ErrnoException, 'append')}`);
 			}
 		}
 		return this.orig().append(normalizedPath, data, options as DataWriteOptions | undefined);
+	}
+
+	async appendBinary(normalizedPath: string, data: ArrayBuffer, options?: DataWriteOptions): Promise<void> {
+		const mount = this.pathMapper.getMountForPath(normalizedPath);
+		if (!mount) return this.orig().appendBinary(normalizedPath, data, options);
+		if (mount.readOnly) { this.warnReadOnly(mount); return; }
+		if (this.isPathIgnored(normalizedPath, mount)) throw new Error(`Folder Bridge: Cannot append to ignored path "${normalizedPath}"`);
+		this.assertVisibleMountFile(normalizedPath, mount);
+		if (mount.mountType === 'webdav' || mount.mountType === 's3' || mount.mountType === 'sftp') {
+			throw new Error(`Folder Bridge: Binary append is not supported for ${mount.mountType} mounts.`);
+		}
+		const realPath = this.toReal(normalizedPath, mount);
+		this.assertAllowed(realPath);
+		this.assertNotReserved(realPath);
+		if (this.dryRun) { logger.debug(`[FolderBridge DryRun] appendBinary: ${realPath}`); return; }
+		try {
+			await fs.promises.appendFile(realPath, Buffer.from(data));
+			void this.onModify?.(normalizedPath).catch(() => { });
+		} catch (error) {
+			throw new Error(`Folder Bridge: ${translateFsError(error as NodeJS.ErrnoException, 'appendBinary')}`);
+		}
 	}
 
 	async process(

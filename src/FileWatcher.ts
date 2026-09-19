@@ -20,6 +20,7 @@ export class FileWatcher {
     private pathMapper: PathMapper;
     private isIgnored: (name: string, mount: MountPoint, mountRelativePath?: string) => boolean;
     private watchers: Map<string, Chokidar.FSWatcher> = new Map();
+    private watcherTokens = new Map<string, symbol>();
     private watcherBackendWarningShown = false;
 
     /**
@@ -143,9 +144,7 @@ export class FileWatcher {
         // [FEATURE_20260222] Initialize chokidar watcher for the mount's real path
         const watcher = chokidar.watch(realPath, {
             ignored: (testPath: string, stats?: import('fs').Stats) => {
-                // Ignore hidden files/folders and node_modules
                 const name = path.basename(testPath);
-                if (name.startsWith('.') || name === 'node_modules') return true;
 
                 // Compute mount-relative real path for path-style ignore patterns
                 const normalizedTest = testPath.replace(/\\/g, '/');
@@ -178,12 +177,19 @@ export class FileWatcher {
             }
         });
 
+        const token = Symbol();
+        this.watcherTokens.set(mount.id, token);
+        const isCurrent = () => {
+            const activeMount = this.pathMapper.getMountByVirtualPath(mount.virtualPath);
+            return this.watcherTokens.get(mount.id) === token && activeMount?.id === mount.id &&
+                this.pathMapper.getEffectiveRealPath(activeMount) === realPath;
+        };
         watcher
-            .on('add', (filePath) => this.handleEvent('file-created', filePath, mount))
-            .on('change', (filePath) => this.handleEvent('file-changed', filePath, mount))
-            .on('unlink', (filePath) => this.handleEvent('file-removed', filePath, mount))
-            .on('addDir', (dirPath) => this.handleEvent('folder-created', dirPath, mount))
-            .on('unlinkDir', (dirPath) => this.handleEvent('folder-removed', dirPath, mount))
+            .on('add', (filePath) => this.handleEvent('file-created', filePath, mount, isCurrent))
+            .on('change', (filePath) => this.handleEvent('file-changed', filePath, mount, isCurrent))
+            .on('unlink', (filePath) => this.handleEvent('file-removed', filePath, mount, isCurrent))
+            .on('addDir', (dirPath) => this.handleEvent('folder-created', dirPath, mount, isCurrent))
+            .on('unlinkDir', (dirPath) => this.handleEvent('folder-removed', dirPath, mount, isCurrent))
             .on('error', (error) => logger.warn(`[FolderBridge] Watcher error for mount ${mount.virtualPath}:`, error));
 
         this.watchers.set(mount.id, watcher);
@@ -194,6 +200,13 @@ export class FileWatcher {
      * Stop watching a mount point.
      */
     stopWatching(mount: MountPoint): void {
+        this.watcherTokens.delete(mount.id);
+        for (const [key, timer] of this.debounceTimers) {
+            if (key.startsWith(`${mount.id}\0`)) {
+                clearTimeout(timer);
+                this.debounceTimers.delete(key);
+            }
+        }
         const watcher = this.watchers.get(mount.id);
         if (watcher) {
             void watcher.close();
@@ -206,6 +219,7 @@ export class FileWatcher {
      * Stop all active watchers.
      */
     stopAll(): void {
+        this.watcherTokens.clear();
         // Cancel pending debounce timers before closing so they don't fire
         // after the plugin is unloaded.
         for (const timer of this.debounceTimers.values()) clearTimeout(timer);
@@ -224,27 +238,30 @@ export class FileWatcher {
      * or save-on-every-keystroke editors.  All other event types execute
      * immediately since they represent unambiguous structural changes.
      */
-    private handleEvent(eventType: string, realPath: string, mount: MountPoint): void {
+    private handleEvent(eventType: string, realPath: string, mount: MountPoint, isCurrent: () => boolean): void {
+        if (!isCurrent()) return;
         if (eventType !== 'file-changed') {
-            void this.dispatchEvent(eventType, realPath, mount);
+            void this.dispatchEvent(eventType, realPath, mount, isCurrent);
             return;
         }
         // Cancel any pending notification for this exact path and schedule a
         // fresh one — timer resets on every write, firing only after the last.
         const debounceMs = mount.watcherDebounceMs ?? FileWatcher.DEFAULT_DEBOUNCE_MS;
-        const existing = this.debounceTimers.get(realPath);
+        const key = `${mount.id}\0${realPath}`;
+        const existing = this.debounceTimers.get(key);
         if (existing !== undefined) clearTimeout(existing);
         const timer = setTimeout(() => {
-            this.debounceTimers.delete(realPath);
-            void this.dispatchEvent(eventType, realPath, mount);
+            this.debounceTimers.delete(key);
+            void this.dispatchEvent(eventType, realPath, mount, isCurrent);
         }, debounceMs);
-        this.debounceTimers.set(realPath, timer);
+        this.debounceTimers.set(key, timer);
     }
 
     /**
      * Perform the actual vault.onChange notification for a chokidar event.
      */
-    private async dispatchEvent(eventType: string, realPath: string, mount: MountPoint): Promise<void> {
+    private async dispatchEvent(eventType: string, realPath: string, mount: MountPoint, isCurrent: () => boolean): Promise<void> {
+        if (!isCurrent()) return;
         // ── Runtime suppression gate ──────────────────────────────────────────
         // Checked before any path mapping so suppression has zero overhead.
         // Also honours the persistent per-mount `watcherSuppressAllEvents` flag.
@@ -257,6 +274,8 @@ export class FileWatcher {
         if (typeof vault.onChange !== 'function') return;
 
         const path = pathMod;
+        const relativePath = path.relative(this.pathMapper.getEffectiveRealPath(mount), realPath);
+        if (relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) return;
         const virtualPath = this.pathMapper.toVirtualPath(realPath, mount);
         const normalizedPath = normalizePath(virtualPath);
 
@@ -290,7 +309,7 @@ export class FileWatcher {
             if (eventType === 'file-created' || eventType === 'file-changed') {
                 // Obsidian expects a stat object for created/modified files
                 const stat = await this.app.vault.adapter.stat(normalizedPath);
-                if (stat) {
+                if (stat && isCurrent()) {
                     await vault.onChange(eventType, normalizedPath, null, stat);
                 }
             } else {
@@ -299,7 +318,7 @@ export class FileWatcher {
             }
 
             // 'raw' triggers Obsidian's cache refresh (MetadataCache re-read)
-            if (eventType === 'file-changed') {
+            if (eventType === 'file-changed' && isCurrent()) {
                 await vault.onChange('raw', normalizedPath, null, null);
             }
         } catch (e) {

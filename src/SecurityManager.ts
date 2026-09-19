@@ -1,5 +1,5 @@
 import { MountPoint, MountType } from './types';
-import { normalizeForComparison, isUNCPath } from './OSHelpers';
+import { getPlatform, normalizeForComparison, isUNCPath, isUnsupportedWindowsDevicePath } from './OSHelpers';
 import { loadOptionalNodeModule } from './runtimeNode';
 // Node.js builtins are lazy-loaded so the plugin still loads on mobile
 const path: typeof import('path') = loadOptionalNodeModule<typeof import('path')>('path') ?? null as never;
@@ -32,18 +32,57 @@ export class SecurityManager {
 	 * On Windows the comparison is case-insensitive.
 	 */
 	isAllowed(realPath: string): boolean {
+		if (isUnsupportedWindowsDevicePath(realPath)) return false;
 		const normalized = normalizeForComparison(realPath);
 		for (const allowed of this.allowlist) {
 			if (
 				normalized === allowed ||
-				normalized.startsWith(allowed + path.sep) ||
-				// Case-insensitive comparison may produce lowercased sep; check both
 				normalized.startsWith(allowed + '/')
 			) {
 				return true;
 			}
 		}
 		return false;
+	}
+
+	private validateLocalPath(candidatePath: string | undefined, fieldLabel: string, usageLabel: string): string | null {
+		const trimmedPath = candidatePath?.trim();
+		if (!trimmedPath) {
+			return `${fieldLabel} cannot be empty.`;
+		}
+		if (isUnsupportedWindowsDevicePath(trimmedPath)) {
+			return `${fieldLabel} uses an unsupported Windows device path.`;
+		}
+		const isPosixAbsolute = path.posix.isAbsolute(trimmedPath);
+		const isWindowsAbsolute = path.win32.isAbsolute(trimmedPath);
+		if (!isPosixAbsolute && !isWindowsAbsolute) {
+			return `${fieldLabel} must be an absolute filesystem path.`;
+		}
+		const comparisonPaths = [normalizeForComparison(trimmedPath)];
+		if (getPlatform() !== 'windows' && isPosixAbsolute) {
+			comparisonPaths.push(path.posix.normalize(trimmedPath));
+		}
+
+		const dangerous = [
+			'C:\\', 'C:/',
+			'C:\\Windows', 'C:/Windows',
+			'C:\\Program Files', 'C:/Program Files',
+			'C:\\Program Files (x86)', 'C:/Program Files (x86)',
+			'/', '/etc', '/usr', '/bin', '/sbin', '/boot', '/dev', '/proc', '/sys', '/var',
+		];
+		for (const dangerousPath of dangerous) {
+			const dangerousNorm = normalizeForComparison(dangerousPath);
+			if (
+				comparisonPaths.some(norm =>
+					norm === dangerousNorm ||
+					(dangerousNorm !== '/' && norm.startsWith(dangerousNorm + '/'))
+				)
+			) {
+				return `"${trimmedPath}" is a protected system path and cannot be ${usageLabel}.`;
+			}
+		}
+
+		return null;
 	}
 
 	/**
@@ -62,32 +101,12 @@ export class SecurityManager {
 		const isCloud = mount.mountType != null && CLOUD_MOUNT_TYPES.has(mount.mountType);
 
 		if (!isCloud) {
-			if (!mount.realPath || !mount.realPath.trim()) {
-				return 'Real path cannot be empty.';
-			}
-			if (!path.isAbsolute(mount.realPath)) {
-				return 'Real path must be an absolute filesystem path.';
-			}
+			const realPathError = this.validateLocalPath(mount.realPath, 'Real path', 'mounted');
+			if (realPathError) return realPathError;
 
-			// Block obviously dangerous root-level paths and their subdirectories
-			const dangerous = [
-				'/', '/etc', '/usr', '/bin', '/sbin', '/boot', '/dev', '/proc', '/sys', '/var',
-				'C:\\', 'C:/',
-				'C:\\Windows', 'C:/Windows',
-				'C:\\Program Files', 'C:/Program Files',
-				'C:\\Program Files (x86)', 'C:/Program Files (x86)'
-			];
-			const norm = normalizeForComparison(mount.realPath);
-			for (const d of dangerous) {
-				const dangerousNorm = normalizeForComparison(d);
-				if (
-					norm === dangerousNorm ||
-					norm.startsWith(dangerousNorm + path.sep) ||
-					// Case-insensitive comparison may produce lowercased or normalized separators; check both
-					norm.startsWith(dangerousNorm + '/')
-				) {
-					return `"${mount.realPath}" is a protected system path and cannot be mounted.`;
-				}
+			if (mount.fallbackRealPath?.trim()) {
+				const fallbackPathError = this.validateLocalPath(mount.fallbackRealPath, 'Fallback path', 'used as a fallback path');
+				if (fallbackPathError) return fallbackPathError;
 			}
 		}
 
@@ -160,10 +179,8 @@ export class SecurityManager {
 			if (existingRealNorm === norm) continue;
 
 			const isCandidateChildOfExisting =
-				norm.startsWith(existingRealNorm + path.sep) ||
 				norm.startsWith(existingRealNorm + '/');
 			const isExistingChildOfCandidate =
-				existingRealNorm.startsWith(norm + path.sep) ||
 				existingRealNorm.startsWith(norm + '/');
 
 			if (isCandidateChildOfExisting || isExistingChildOfCandidate) {

@@ -1,5 +1,10 @@
 # Community Plugin Submission Checklist
 
+> Historical lint-cleanup snapshot, not current release approval or evidence of
+> Community Plugins acceptance. See [Compatibility Release Validation](RELEASE_VALIDATION.md)
+> for outstanding native testing and distribution gates. Do not use the historical
+> blanket staging command below on a working tree containing unrelated changes.
+
 ## ESLint Compliance ✅ COMPLETE
 
 ### Sentence Case Violations

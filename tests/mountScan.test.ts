@@ -63,6 +63,29 @@ describe('replayMountContentsToVault', () => {
         expect(deps.onFileCreated).toHaveBeenCalledWith('mounts/docs/subfolder/child.md', expect.any(Object));
     });
 
+    it('uses configured exclusions for dot-prefixed folders and files', async () => {
+        const mount = mkMount();
+        const deps = {
+            list: vi.fn(async (folderPath: string) => folderPath === mount.virtualPath
+                ? { folders: ['mounts/docs/.notes', 'mounts/docs/.git'], files: ['mounts/docs/.note.md', 'mounts/docs/.DS_Store'] }
+                : { folders: [], files: ['mounts/docs/.notes/child.md'] }),
+            stat: vi.fn(async () => ({ type: 'file' as const, ctime: 0, mtime: 0, size: 1 })),
+            hasAbstractFile: vi.fn(() => false),
+            isIgnored: vi.fn((name: string) => name === '.git' || name === '.DS_Store'),
+            onFolderCreated: vi.fn(async () => { }),
+            onFileCreated: vi.fn(async () => { }),
+            yieldToEventLoop: vi.fn(async () => { }),
+        };
+
+        const result = await replayMountContentsToVault(mount, deps);
+
+        expect(result.folderCount).toBe(1);
+        expect(result.fileCount).toBe(2);
+        expect(deps.list).not.toHaveBeenCalledWith('mounts/docs/.git');
+        expect(deps.onFileCreated).toHaveBeenCalledWith('mounts/docs/.note.md', expect.any(Object));
+        expect(deps.onFileCreated).toHaveBeenCalledWith('mounts/docs/.notes/child.md', expect.any(Object));
+    });
+
     it('skips files hidden by the mount visible-file filter', async () => {
         const mount = mkMount({ visibleFileFilter: 'markdown-only' });
         const deps = {

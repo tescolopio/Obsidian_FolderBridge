@@ -66,7 +66,6 @@ export async function replayMountContentsToVault(
                     : undefined;
 
                 if (deps.isIgnored(folderName, mount, folderMountRelPath)) continue;
-                if (folderName.startsWith('.') || folderName === 'node_modules') continue;
 
                 if (!deps.hasAbstractFile(folder)) {
                     await deps.onFolderCreated(folder);
@@ -95,7 +94,6 @@ export async function replayMountContentsToVault(
                     : undefined;
 
                 if (deps.isIgnored(fileName, mount, fileMountRelPath)) continue;
-                if (fileName.startsWith('.')) continue;
                 if (!isVisibleFileInMount(file, mount)) continue;
 
                 if (!deps.hasAbstractFile(file)) {

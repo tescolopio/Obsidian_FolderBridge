@@ -51,6 +51,38 @@ describe('PathMapper', () => {
 	});
 
 	describe('toRealPath', () => {
+		it.each([
+			{ realPath: '/new-primary' },
+			{ fallbackRealPath: undefined },
+			{ fallbackRealPath: '/new-fallback' },
+			{ deviceOverrides: { desktop: '/override' } },
+			{ mountType: 'sftp' as const },
+		])('invalidates a same-ID resolution after root changes: %j', changes => {
+			const original = { ...mount('Work', '/primary'), fallbackRealPath: '/fallback' };
+			mapper.update([original], 'desktop');
+			mapper.setResolvedPath(original.id, '/fallback');
+			const updated = { ...original, ...changes };
+			mapper.update([updated], 'desktop');
+			expect(mapper.getEffectiveRealPath(updated)).toBe(updated.deviceOverrides?.desktop ?? updated.realPath);
+		});
+
+		it('preserves a resolved root across unrelated settings changes', () => {
+			const original = { ...mount('Work', '/primary'), fallbackRealPath: '/fallback' };
+			mapper.update([original], 'desktop');
+			mapper.setResolvedPath(original.id, '/fallback');
+			const updated = { ...original, readOnly: true };
+			mapper.update([updated], 'desktop');
+			expect(mapper.getEffectiveRealPath(updated)).toBe('/fallback');
+		});
+
+		it('invalidates a resolved root when the current device changes', () => {
+			const original = { ...mount('Work', '/primary'), fallbackRealPath: '/fallback' };
+			mapper.update([original], 'desktop');
+			mapper.setResolvedPath(original.id, '/fallback');
+			mapper.update([original], 'laptop');
+			expect(mapper.getEffectiveRealPath(original)).toBe('/primary');
+		});
+
 		it('returns realPath for the mount root', () => {
 			const m = mount('Projects/Work', '/real/Work');
 			expect(mapper.toRealPath('Projects/Work', m)).toBe('/real/Work');

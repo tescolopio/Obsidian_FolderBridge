@@ -98,15 +98,11 @@ Quick compatibility summary. For platform-specific caveats and setup notes, see 
 
 ## Installation
 
-### From Obsidian Community Plugins (recommended)
-
-1. Open **Settings → Community Plugins** and disable Safe Mode if needed
-2. Click **Browse** and search for **Folder Bridge**
-3. Install and enable the plugin
+Folder Bridge is not currently listed in Obsidian's Community Plugins directory. Use BRAT or manual installation below until the community submission is approved.
 
 ### Using BRAT (Beta Reviewers Auto-update Tool)
 
-To test the latest pre-release versions ahead of an official release, you can install via [BRAT](https://tfthacker.com/BRAT):
+Install the latest published GitHub release via [BRAT](https://tfthacker.com/BRAT):
 
 1. Install the **Obsidian42 - BRAT** plugin from the Community Plugins directory.
 2. Enable BRAT in your settings.
@@ -116,7 +112,7 @@ To test the latest pre-release versions ahead of an official release, you can in
 
 ### Manual Installation
 
-1. Download `main.js` and `manifest.json` from the [latest release](https://github.com/tescolopio/Obsidian_FolderBridge/releases/latest)
+1. Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/tescolopio/Obsidian_FolderBridge/releases/latest)
 2. Copy them to `<your-vault>/.obsidian/plugins/folderbridge/`
 3. Enable the plugin in **Settings → Community Plugins**
 

@@ -22,7 +22,6 @@
     "author": "tescolopio",
     "license": "MIT",
     "devDependencies": {
-        "@esbuild/linux-x64": "^0.27.3",
         "@eslint/json": "^1.1.0",
         "@types/node": "^20.11.16",
         "@types/ssh2": "^1.15.4",
@@ -32,7 +31,7 @@
         "esbuild": "0.27.3",
         "eslint": "^10.2.0",
         "eslint-plugin-obsidianmd": "^0.1.9",
-        "obsidian": "^1.12.0",
+        "obsidian": "^1.13.1",
         "tslib": "2.6.2",
         "typescript": "5.3.3",
         "typescript-eslint": "^8.56.0",

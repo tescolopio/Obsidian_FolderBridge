@@ -43,7 +43,7 @@ cp main.js manifest.json styles.css "/path/to/vault/.obsidian/plugins/obsidian-f
 1. Open Obsidian
 2. Go to: **Settings → Community Plugins**
 3. Turn off "Restricted mode" (if enabled)
-4. Click "Browse" → Find "FolderBridge" in your local plugins
+4. Reload Obsidian, then find "Folder Bridge" in the installed plugins list (not **Browse**)
 5. Click **"Enable"**
 
 ### 5. Start Developing! (Optional)
