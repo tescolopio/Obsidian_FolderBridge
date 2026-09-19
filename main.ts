@@ -543,6 +543,14 @@ export default class FolderBridgePlugin extends Plugin {
 
 		this.pathMapper = new PathMapper();
 		this.security = new SecurityManager(this.settings.allowlist);
+
+		// Persist SFTP host keys pinned on first connect (trust on first use).
+		SFTPAdapter.onHostKeyPinned = (mountId, fingerprint) => {
+			const mount = this.persistedMountPoints.find(m => m.id === mountId);
+			if (!mount || mount.sftpHostKeyFingerprint === fingerprint) return;
+			mount.sftpHostKeyFingerprint = fingerprint;
+			void this.saveSettings();
+		};
 		this.pathMapper.update(this.settings.mountPoints, this.settings.deviceId);
 
 		// [FEATURE_20260222] Initialize FileWatcher
@@ -937,6 +945,7 @@ export default class FolderBridgePlugin extends Plugin {
 	}
 
 	onunload() {
+		SFTPAdapter.onHostKeyPinned = null;
 		this.explorerUnloaded = true;
 		for (const timer of this.explorerTimers) clearTimeout(timer);
 		this.explorerTimers.clear();
@@ -2276,6 +2285,15 @@ export default class FolderBridgePlugin extends Plugin {
 			...newData,
 			id,
 		};
+
+		// A pinned SFTP host key belongs to one host:port.  Drop it when the
+		// endpoint changes so the new server's key is pinned on first connect.
+		const sftpEndpointChanged =
+			oldMount.sftpHost !== this.persistedMountPoints[idx].sftpHost ||
+			(oldMount.sftpPort ?? 22) !== (this.persistedMountPoints[idx].sftpPort ?? 22);
+		if (sftpEndpointChanged || this.persistedMountPoints[idx].mountType !== 'sftp') {
+			delete this.persistedMountPoints[idx].sftpHostKeyFingerprint;
+		}
 
 		await this.saveSettings();
 		this.syncEffectiveMountState();
