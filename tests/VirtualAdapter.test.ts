@@ -220,3 +220,75 @@ describe('VirtualAdapter cachedRead', () => {
         expect(original.cachedRead).toHaveBeenCalledWith('vault/note.md');
     });
 });
+
+describe('VirtualAdapter trash on local mounts', () => {
+    const tempDirs: string[] = [];
+
+    afterEach(async () => {
+        await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
+    });
+
+    async function setup(original: Record<string, unknown> | null = null) {
+        const mountDir = await fs.mkdtemp(path.join(os.tmpdir(), 'folderbridge-trash-mount-'));
+        const vaultDir = await fs.mkdtemp(path.join(os.tmpdir(), 'folderbridge-trash-vault-'));
+        tempDirs.push(mountDir, vaultDir);
+        const mount = makeMount(mountDir);
+        const mapper = new PathMapper();
+        mapper.update([mount], 'test-device');
+        const onDelete = vi.fn().mockResolvedValue(undefined);
+        const adapter = new VirtualAdapter(
+            original ?? { getBasePath: () => vaultDir },
+            mapper,
+            new SecurityManager([mountDir]),
+            false,
+            10 * 1024 * 1024,
+            async () => 'delete',
+            async () => { },
+            () => false,
+            undefined,
+            onDelete,
+        );
+        return { adapter, mountDir, vaultDir, onDelete };
+    }
+
+    it('trashLocal moves the file into the vault .trash instead of deleting it', async () => {
+        const { adapter, mountDir, vaultDir, onDelete } = await setup();
+        await fs.writeFile(path.join(mountDir, 'note.md'), '# keep me');
+
+        await adapter.trashLocal('Mounted/note.md');
+
+        await expect(fs.stat(path.join(mountDir, 'note.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+        expect(await fs.readFile(path.join(vaultDir, '.trash', 'note.md'), 'utf-8')).toBe('# keep me');
+        expect(onDelete).toHaveBeenCalledWith('Mounted/note.md');
+    });
+
+    it('trashLocal keeps folder contents and does not overwrite an existing trash entry', async () => {
+        const { adapter, mountDir, vaultDir } = await setup();
+        await fs.mkdir(path.join(vaultDir, '.trash', 'sub'), { recursive: true });
+        await fs.writeFile(path.join(vaultDir, '.trash', 'sub', 'older.md'), 'older');
+        await fs.mkdir(path.join(mountDir, 'sub'));
+        await fs.writeFile(path.join(mountDir, 'sub', 'inner.md'), 'inner');
+
+        await adapter.trashLocal('Mounted/sub');
+
+        expect(await fs.readFile(path.join(vaultDir, '.trash', 'sub', 'older.md'), 'utf-8')).toBe('older');
+        expect(await fs.readFile(path.join(vaultDir, '.trash', 'sub 2', 'inner.md'), 'utf-8')).toBe('inner');
+    });
+
+    it('trashLocal leaves the file in place when the vault path is unknown', async () => {
+        const { adapter, mountDir } = await setup({});
+        await fs.writeFile(path.join(mountDir, 'note.md'), '# keep me');
+
+        await expect(adapter.trashLocal('Mounted/note.md')).rejects.toThrow(/not deleted/);
+        expect(await fs.readFile(path.join(mountDir, 'note.md'), 'utf-8')).toBe('# keep me');
+    });
+
+    it('trashSystem reports failure instead of deleting when no system trash is available', async () => {
+        const { adapter, mountDir, onDelete } = await setup();
+        await fs.writeFile(path.join(mountDir, 'note.md'), '# keep me');
+
+        expect(await adapter.trashSystem('Mounted/note.md')).toBe(false);
+        expect(await fs.readFile(path.join(mountDir, 'note.md'), 'utf-8')).toBe('# keep me');
+        expect(onDelete).not.toHaveBeenCalled();
+    });
+});
