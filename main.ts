@@ -415,7 +415,20 @@ export default class FolderBridgePlugin extends Plugin {
 	}
 
 	private effectiveRealPathForAllowlist(mount: MountPoint): string {
-		return mount.deviceOverrides?.[this.settings.deviceId] ?? mount.realPath;
+		const override = mount.deviceOverrides?.[this.settings.deviceId];
+		if (!override) return mount.realPath;
+		// Mounts loaded straight from data.json (e.g. synced from another device)
+		// never pass through validateMount(), so re-check the override here and
+		// refuse to allowlist a protected path.  The mount then fails closed:
+		// PathMapper still resolves to the override, but every guarded read and
+		// write is denied because the path is not on the allowlist.
+		const validator = this.security ?? new SecurityManager([]);
+		const error = validator.validateDeviceOverrides({ [this.settings.deviceId]: override });
+		if (error) {
+			logger.warn(`[FolderBridge] Ignoring device override for mount "${mount.virtualPath}": ${error}`);
+			return mount.realPath;
+		}
+		return override;
 	}
 
 	private isCloudMount(mount: Pick<MountPoint, 'mountType'>): boolean {

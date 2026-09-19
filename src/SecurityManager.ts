@@ -86,6 +86,25 @@ export class SecurityManager {
 	}
 
 	/**
+	 * Validates every per-device override path with the same rules as realPath.
+	 * Returns an error string on failure, or null on success.
+	 */
+	validateDeviceOverrides(deviceOverrides: unknown): string | null {
+		if (deviceOverrides == null) return null;
+		if (typeof deviceOverrides !== 'object' || Array.isArray(deviceOverrides)) {
+			return 'Device overrides must be an object mapping device IDs to paths.';
+		}
+		for (const [deviceId, overridePath] of Object.entries(deviceOverrides as Record<string, unknown>)) {
+			if (typeof overridePath !== 'string') {
+				return `Device override for "${deviceId}" must be a path string.`;
+			}
+			const error = this.validateLocalPath(overridePath, `Device override path for "${deviceId}"`, 'mounted');
+			if (error) return error;
+		}
+		return null;
+	}
+
+	/**
 	 * Validates a candidate mount before it is added to settings.
 	 * Returns an error string on failure, or null on success.
 	 */
@@ -108,6 +127,13 @@ export class SecurityManager {
 				const fallbackPathError = this.validateLocalPath(mount.fallbackRealPath, 'Fallback path', 'used as a fallback path');
 				if (fallbackPathError) return fallbackPathError;
 			}
+
+			// A device override replaces realPath as the effective mount root on
+			// that device (and is auto-allowlisted), so it must pass the same
+			// checks.  Without this, a shared TOC file or imported JSON could map
+			// a protected path via deviceOverrides while realPath looks harmless.
+			const overridesError = this.validateDeviceOverrides(mount.deviceOverrides);
+			if (overridesError) return overridesError;
 		}
 
 		// Normalize virtual path (trim and remove trailing slashes) for comparison
