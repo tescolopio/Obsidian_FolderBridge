@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Drop watcher events received during suppression immediately, cancel pending change notifications when suppression starts, and prevent in-flight metadata reads or cache refreshes from escaping a suppression toggle. Applies to per-mount and global runtime suppression; new events resume normally after unmuting.
+- Added regression coverage for saved suppression changes taking effect without restart and surviving reload. Existing startup behavior is unchanged: saved suppression skips child-file replay, so mounted folders may appear empty. Native macOS confirmation for #16 remains pending.
+
 ## [2.15.3-rc.2] - 2026-09-19
 
 This opt-in prerelease contains all changes merged through PR #44, including the

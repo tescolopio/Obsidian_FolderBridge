@@ -83,6 +83,116 @@ describe('FileWatcher', () => {
         mockWatcherOn.mockReturnValue(mockWatcherInstance); // re-establish chaining
     });
 
+    describe('suppression transitions', () => {
+        it.each(['mount', 'global'])('drops changes received during %s suppression even when resumed before debounce expires', async scope => {
+            vi.useFakeTimers();
+            const { app, mockOnChange, mockGetAbstractFileByPath } = makeApp();
+            mockGetAbstractFileByPath.mockReturnValue({});
+            const watcher = new FileWatcher(app, makeMapper(mount), () => false);
+            try {
+                watcher.startWatching(mount);
+                const target = scope === 'global' ? null : mount.id;
+                watcher.setSuppressed(target, true);
+                await getCallback('change')(`${mount.realPath}/note.md`);
+                watcher.setSuppressed(target, false);
+                await vi.runAllTimersAsync();
+                expect(mockOnChange).not.toHaveBeenCalled();
+
+                await getCallback('change')(`${mount.realPath}/note.md`);
+                await vi.runAllTimersAsync();
+                expect(mockOnChange.mock.calls.map(call => call[0])).toEqual(['file-changed', 'raw']);
+            } finally {
+                watcher.stopAll();
+                vi.useRealTimers();
+            }
+        });
+
+        it.each([
+            ['mount', false], ['mount', true], ['global', false], ['global', true],
+        ] as const)('drops a pending stat during %s suppression even if resumed: %s', async (scope, resume) => {
+            const { app, mockOnChange, mockStat } = makeApp();
+            let finishStat!: (value: { size: number; ctime: number; mtime: number }) => void;
+            mockStat.mockImplementation(() => new Promise(resolve => { finishStat = resolve; }));
+            const watcher = new FileWatcher(app, makeMapper(mount), () => false);
+            try {
+                watcher.startWatching(mount);
+                await getCallback('add')(`${mount.realPath}/note.md`);
+                const target = scope === 'global' ? null : mount.id;
+                watcher.setSuppressed(target, true);
+                if (resume) watcher.setSuppressed(target, false);
+                finishStat({ size: 1, ctime: 0, mtime: 0 });
+                await Promise.resolve();
+                expect(mockOnChange).not.toHaveBeenCalled();
+            } finally {
+                watcher.stopAll();
+            }
+        });
+
+        it.each(['mount', 'global'])('cancels already queued changes when %s suppression starts', async scope => {
+            vi.useFakeTimers();
+            const { app, mockOnChange, mockGetAbstractFileByPath } = makeApp();
+            mockGetAbstractFileByPath.mockReturnValue({});
+            const watcher = new FileWatcher(app, makeMapper(mount), () => false);
+            try {
+                watcher.startWatching(mount);
+                await getCallback('change')(`${mount.realPath}/note.md`);
+                expect(vi.getTimerCount()).toBe(1);
+                const target = scope === 'global' ? null : mount.id;
+                watcher.setSuppressed(target, true);
+                watcher.setSuppressed(target, false);
+                expect(vi.getTimerCount()).toBe(0);
+                await vi.runAllTimersAsync();
+                expect(mockOnChange).not.toHaveBeenCalled();
+            } finally {
+                watcher.stopAll();
+                vi.useRealTimers();
+            }
+        });
+
+        it('does not deliver raw refresh after suppression starts during a change notification', async () => {
+            vi.useFakeTimers();
+            const { app, mockOnChange, mockGetAbstractFileByPath } = makeApp();
+            mockGetAbstractFileByPath.mockReturnValue({});
+            const watcher = new FileWatcher(app, makeMapper(mount), () => false);
+            mockOnChange.mockImplementation(async () => {
+                watcher.setSuppressed(mount.id, true);
+                watcher.setSuppressed(mount.id, false);
+            });
+            try {
+                watcher.startWatching(mount);
+                await getCallback('change')(`${mount.realPath}/note.md`);
+                await vi.runAllTimersAsync();
+                expect(mockOnChange.mock.calls.map(call => call[0])).toEqual(['file-changed']);
+            } finally {
+                watcher.stopAll();
+                vi.useRealTimers();
+            }
+        });
+
+        it('keeps other mounts active and preserves per-mount suppression when global suppression ends', async () => {
+            const other = mkMount('m2', 'other', '/other');
+            const mapper = makeMapper(mount);
+            mapper.update([mount, other], 'test-device');
+            const { app, mockOnChange } = makeApp();
+            const watcher = new FileWatcher(app, mapper, () => false);
+            try {
+                watcher.startWatching(mount);
+                const firstAdd = getCallback('add');
+                mockWatcherOn.mockClear();
+                watcher.startWatching(other);
+                const otherAdd = getCallback('add');
+                watcher.setSuppressed(mount.id, true);
+                watcher.setSuppressed(null, true);
+                watcher.setSuppressed(null, false);
+                await firstAdd(`${mount.realPath}/hidden.md`);
+                await otherAdd('/other/visible.md');
+                expect(mockOnChange).toHaveBeenCalledExactlyOnceWith('file-created', 'other/visible.md', null, expect.any(Object));
+            } finally {
+                watcher.stopAll();
+            }
+        });
+    });
+
     // ── startWatching ──────────────────────────────────────────────────────────
 
     describe('startWatching', () => {

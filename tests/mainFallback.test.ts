@@ -101,6 +101,26 @@ describe('main fallback regressions', () => {
         vi.restoreAllMocks();
     });
 
+    it.each([false, true])('applies saved suppression changes immediately and retains them on reload (initial: %s)', async initial => {
+        const existing = { ...mount('docs'), watcherSuppressAllEvents: initial };
+        const { plugin, saveData } = await makePlugin([existing]);
+        const watcher = { stopWatching: vi.fn(), startWatching: vi.fn() };
+        plugin.fileWatcher = watcher as unknown as FileWatcher;
+        const reinject = vi.spyOn(plugin, 'notifyVaultMountAdded');
+
+        await plugin.updateMount(existing.id, { ...existing, watcherSuppressAllEvents: !initial });
+
+        expect(watcher.stopWatching).toHaveBeenCalledExactlyOnceWith(existing);
+        expect(watcher.startWatching).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+            id: existing.id, watcherSuppressAllEvents: !initial,
+        }));
+        expect(plugin.pathMapper.getMountByVirtualPath('docs')?.watcherSuppressAllEvents).toBe(!initial);
+        expect(reinject).not.toHaveBeenCalled();
+        const saved = saveData.mock.calls.at(-1)![0] as { mountPoints: MountPoint[] };
+        const reloaded = await makePlugin(saved.mountPoints);
+        expect(reloaded.plugin.pathMapper.getMountByVirtualPath('docs')?.watcherSuppressAllEvents).toBe(!initial);
+    });
+
     it('suggests an unused child and refuses to shadow existing vault folders', async () => {
         const { plugin, files } = await makePlugin();
         const explorer = plugin as unknown as {

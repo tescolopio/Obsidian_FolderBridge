@@ -56,6 +56,8 @@ export class FileWatcher {
      */
     private suppressedMounts: Set<string> = new Set();
     private _suppressAll = false;
+    private suppressionTokens = new Map<string, symbol>();
+    private globalSuppressionToken = Symbol();
 
     constructor(app: App, pathMapper: PathMapper, isIgnored: (name: string, mount: MountPoint, mountRelativePath?: string) => boolean) {
         this.app = app;
@@ -81,6 +83,19 @@ export class FileWatcher {
      * @param suppress `true` to mute events, `false` to restore them.
      */
     setSuppressed(mountId: string | null, suppress: boolean): void {
+        if (suppress) {
+            if (mountId === null) {
+                this.globalSuppressionToken = Symbol();
+            } else {
+                this.suppressionTokens.set(mountId, Symbol());
+            }
+            for (const [key, timer] of this.debounceTimers) {
+                if (mountId === null || key.startsWith(`${mountId}\0`)) {
+                    clearTimeout(timer);
+                    this.debounceTimers.delete(key);
+                }
+            }
+        }
         if (mountId === null) {
             this._suppressAll = suppress;
         } else if (suppress) {
@@ -205,6 +220,7 @@ export class FileWatcher {
      */
     stopWatching(mount: MountPoint): void {
         this.watcherTokens.delete(mount.id);
+        this.suppressionTokens.delete(mount.id);
         for (const [key, timer] of this.debounceTimers) {
             if (key.startsWith(`${mount.id}\0`)) {
                 clearTimeout(timer);
@@ -224,6 +240,7 @@ export class FileWatcher {
      */
     stopAll(): void {
         this.watcherTokens.clear();
+        this.suppressionTokens.clear();
         // Cancel pending debounce timers before closing so they don't fire
         // after the plugin is unloaded.
         for (const timer of this.debounceTimers.values()) clearTimeout(timer);
@@ -243,9 +260,16 @@ export class FileWatcher {
      * immediately since they represent unambiguous structural changes.
      */
     private handleEvent(eventType: string, realPath: string, mount: MountPoint, isCurrent: () => boolean): void {
-        if (!isCurrent()) return;
+        const globalToken = this.globalSuppressionToken;
+        const mountToken = this.suppressionTokens.get(mount.id);
+        const canDispatch = () => isCurrent() &&
+            this.globalSuppressionToken === globalToken &&
+            this.suppressionTokens.get(mount.id) === mountToken &&
+            !this.isSuppressed(mount.id) &&
+            !this.pathMapper.getMountByVirtualPath(mount.virtualPath)?.watcherSuppressAllEvents;
+        if (!canDispatch()) return;
         if (eventType !== 'file-changed') {
-            void this.dispatchEvent(eventType, realPath, mount, isCurrent);
+            void this.dispatchEvent(eventType, realPath, mount, canDispatch);
             return;
         }
         // Cancel any pending notification for this exact path and schedule a
@@ -256,7 +280,7 @@ export class FileWatcher {
         if (existing !== undefined) clearTimeout(existing);
         const timer = setTimeout(() => {
             this.debounceTimers.delete(key);
-            void this.dispatchEvent(eventType, realPath, mount, isCurrent);
+            void this.dispatchEvent(eventType, realPath, mount, canDispatch);
         }, debounceMs);
         this.debounceTimers.set(key, timer);
     }
