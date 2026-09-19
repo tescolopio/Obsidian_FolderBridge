@@ -1,6 +1,6 @@
 {
     "name": "folderbridge",
-    "version": "2.15.3",
+    "version": "2.15.3-rc.1",
     "description": "Adds external folders to your vault as seamless, native-feeling directories. Creates virtual mount points that map real filesystem paths into the vault.",
     "main": "main.js",
     "scripts": {

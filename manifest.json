@@ -1,10 +1,10 @@
 {
-	"id": "folderbridge",
-	"name": "Folder Bridge",
-	"version": "2.15.3",
-	"minAppVersion": "0.15.0",
-	"description": "Adds external folders to your vault as seamless, native-feeling directories. Supports local filesystem, WebDAV, S3/Backblaze B2, and SFTP mounts.",
-	"author": "Timmothy Escolopio",
-	"authorUrl": "https://github.com/tescolopio",
-	"isDesktopOnly": false
+    "id": "folderbridge",
+    "name": "Folder Bridge",
+    "version": "2.15.3-rc.1",
+    "minAppVersion": "0.15.0",
+    "description": "Adds external folders to your vault as seamless, native-feeling directories. Supports local filesystem, WebDAV, S3/Backblaze B2, and SFTP mounts.",
+    "author": "Timmothy Escolopio",
+    "authorUrl": "https://github.com/tescolopio",
+    "isDesktopOnly": false
 }

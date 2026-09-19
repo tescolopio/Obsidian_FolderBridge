@@ -47,6 +47,19 @@ npm test            # Vitest unit tests
 
 ## 2. Version Bump Steps
 
+### Prerelease Candidates
+
+Use an explicit prerelease version such as `2.15.3-rc.1` consistently in
+`package.json`, `package-lock.json`, `manifest.json`, `versions.json`, and the
+changelog. The tag must match exactly, without a `v` prefix. Review and validate
+the preparation commit before pushing its tag. The release workflow marks tags
+containing `-` as prereleases and does not mark them as latest.
+
+Prereleases are for opt-in testing with disposable vaults and backed-up sources.
+Complete the native gates in `docs/RELEASE_VALIDATION.md` before stable release.
+For stable promotion, prepare the stable version metadata and a matching new
+tag; do not merely remove the prerelease flag from a candidate tag.
+
 Every release follows this sequence. **Do not skip steps.**
 
 ### 2a. Write the CHANGELOG entry
