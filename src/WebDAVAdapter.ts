@@ -19,6 +19,13 @@ import { logger } from './logger';
  *   mount.webdavUrl  = server root URL, e.g. "https://mycloud.com/dav"
  * Together they form the full resource base: "https://mycloud.com/dav/Documents/Work/..."
  */
+/** True when a `webdav` client error represents HTTP 404 (resource missing). */
+export function isWebDAVNotFound(err: unknown): boolean {
+    if (!err || typeof err !== 'object') return false;
+    const e = err as { status?: number; response?: { status?: number } };
+    return e.status === 404 || e.response?.status === 404;
+}
+
 export class WebDAVAdapter {
     private client: WebDAVClient;
     private baseUrl: string;
@@ -160,10 +167,15 @@ export class WebDAVAdapter {
     }
 
     async append(serverPath: string, data: string): Promise<void> {
+        // Only a genuine 404 may be treated as an empty file.  Any other read
+        // failure (timeout, 401/403, 5xx) must abort: otherwise the PUT below
+        // would replace the whole file with just the appended fragment.
         let existing = '';
         try {
             existing = await this.readText(serverPath);
-        } catch { /* file may not exist yet */ }
+        } catch (err) {
+            if (!isWebDAVNotFound(err)) throw err;
+        }
         await this.writeText(serverPath, existing + data);
     }
 
