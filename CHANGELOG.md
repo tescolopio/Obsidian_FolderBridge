@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.15.3-rc.2] - 2026-09-19
+
+This opt-in prerelease contains all changes merged through PR #44, including the
+compatibility fixes in rc.1. Stable 2.15.2 remains the latest stable release.
+Back up settings and use a disposable vault with copied source files for testing.
+
+### Added
+- File-explorer mount indicators and source-path details using the active fallback or device override.
+- Folder context-menu action that suggests an unused child mount destination and rejects existing vault paths.
+- Persistent expansion state for mounted folders, including supported cross-device mounts.
+
+### Fixed
+- Disabled chokidar's native fsevents backend to avoid incompatible Electron bindings; native macOS validation is still pending.
+- Guarded delayed tooltip updates against stale hover state and preserved native folder attributes.
+- Cancelled queued explorer work on unload, reattached observers when the explorer container changes, and handled expansion-save failures with retryable state.
+- Integrated the histories of PRs #27, #28, #30, #31, #39 and #40 while preserving the strengthened compatibility implementations.
+
+### Validation And Known Limitations
+- Full validation covers 351 tests across 13 files, lint, UI text, TypeScript checking and the production build. Obsidian is mocked; native Windows/WSL, macOS and Android tests remain pending.
+- Install main.js, manifest.json and styles.css from this release together. Please report the exact build, OS/device, Obsidian version, steps and pass/fail result on the relevant issue.
+- Test explorer tooltips, context-menu mounting, expansion after restart, external file changes and plugin unload, in addition to the original issue reproduction.
+- Existing dependency findings remain unresolved: 13 affected package entries (7 high, 5 moderate, 1 low). This is not a security-remediation release.
+- Unresolved macOS opening, suppression semantics and deferred feature requests remain open work. Community-directory review and native compatibility are not established by this prerelease.
+- Stable promotion remains gated by docs/RELEASE_VALIDATION.md; do not treat this candidate as a stable release.
+
 ## [2.15.3-rc.1] - 2026-09-19
 
 This is a prerelease for testing, not a stable release. Back up your vault and

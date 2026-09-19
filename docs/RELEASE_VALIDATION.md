@@ -5,9 +5,10 @@ The compatibility batch shipped as opt-in prerelease 2.15.3-rc.1 through PRs
 #42 and #43. The remaining integration adds PR #39 and records the ancestry of
 the older PRs whose changes were already included in #42.
 
-On 2026-09-19 the maintainer chose to merge and test, then wait for native results.
-Do not bump the version or publish a stable release until that gate is satisfied.
-The existing prerelease does not contain the subsequent explorer integration.
+On 2026-09-19 the maintainer approved 2.15.3-rc.2 to distribute all merged
+changes for testing. It includes the subsequent explorer integration from #44.
+Do not publish a stable release until the native gate is satisfied. The older
+2.15.3-rc.1 download does not include that explorer integration.
 
 ## Automated Checks
 
