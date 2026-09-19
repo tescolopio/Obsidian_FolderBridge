@@ -163,26 +163,24 @@ export class S3Adapter {
     // ------------------------------------------------------------------
 
     /**
-     * Translate a server-relative path (the value produced by
-     * PathMapper.toRealPath for an S3 mount) into an S3 object key.
+     * Translate a server path (the value produced by
+     * VirtualAdapter.toServerPath) into an S3 object key.
      *
-     * PathMapper stores `mount.realPath` as the key prefix root (e.g. "/" or
-     * "/notes/").  The server-relative path handed to us already has that
-     * prefix stripped — it is the path relative to the S3 mount root.
-     * We prepend `this.prefix` (mount.realPath normalised) to form the full key.
+     * The path handed to us is already rooted at `mount.realPath` — e.g. for a
+     * mount with realPath "/notes", the file "a.md" arrives as "/notes/a.md",
+     * exactly as it does for the WebDAV and SFTP adapters.  The key is
+     * therefore just that path without its leading slash.  `this.prefix` must
+     * NOT be prepended here: doing so yields "notes/notes/a.md".
      */
-    private toKey(serverRelativePath: string): string {
-        // Normalise to forward slashes; strip leading slash
-        const clean = serverRelativePath.replace(/\\/g, '/').replace(/^\//, '');
-        return this.prefix ? `${this.prefix}${clean}` : clean;
+    private toKey(serverPath: string): string {
+        return serverPath.replace(/\\/g, '/').replace(/^\/+/, '');
     }
 
     /**
-     * Convert an S3 object key back to a server-relative path (leading slash).
+     * Convert an S3 object key back to a server path (leading slash).
      */
     private fromKey(key: string): string {
-        const stripped = this.prefix ? key.slice(this.prefix.length) : key;
-        return stripped.startsWith('/') ? stripped : '/' + stripped;
+        return key.startsWith('/') ? key : '/' + key;
     }
 
     /**
