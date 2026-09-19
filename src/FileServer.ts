@@ -261,6 +261,10 @@ export class FileServer {
     }
 
     private isPathAllowed(forwardSlashPath: string): boolean {
+        // Reject any `..` segment outright.  The prefix comparison below is
+        // purely lexical, so "<root>/../../etc/passwd" would otherwise pass
+        // and be resolved by fs to a file outside the mount.
+        if (forwardSlashPath.split('/').includes('..')) return false;
         for (const root of this.allowedRoots) {
             if (forwardSlashPath.startsWith(root + '/') || forwardSlashPath === root) {
                 return true;
