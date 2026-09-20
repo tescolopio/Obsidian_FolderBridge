@@ -432,10 +432,15 @@ export class S3Adapter {
     }
 
     async append(serverPath: string, data: string): Promise<void> {
+        // Only a genuine "not found" may be treated as an empty file.  Any other
+        // read failure (timeout, 401/403, 5xx) must abort: otherwise the write
+        // below would replace the whole object with just the appended fragment.
         let existing = '';
         try {
             existing = await this.readText(serverPath);
-        } catch { /* file may not exist yet */ }
+        } catch (err) {
+            if (!this.isNotFound(err)) throw err;
+        }
         await this.writeText(serverPath, existing + data);
     }
 

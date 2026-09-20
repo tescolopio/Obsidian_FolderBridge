@@ -329,10 +329,13 @@ export class SFTPAdapter {
     }
 
     async append(serverPath: string, data: string): Promise<void> {
-        let existing = '';
-        try {
-            existing = await this.readText(serverPath);
-        } catch { /* file may not exist yet */ }
+        // Probe existence with the client's own exists(), which rejects on
+        // connection errors (unlike this.exists(), which maps them to false).
+        // A failed read must abort: otherwise the write below would replace
+        // the whole file with just the appended fragment.
+        await this.connect();
+        const present = await this.sftp!.exists(this.toRemotePath(serverPath));
+        const existing = present ? await this.readText(serverPath) : '';
         await this.writeText(serverPath, existing + data);
     }
 
