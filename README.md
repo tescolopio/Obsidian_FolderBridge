@@ -4,20 +4,21 @@ Extends Obsidian's single-root vault by letting you mount external folders as se
 
 ---
 
-## Full Feature List (v2.14.0)
+## Current Release: 2.15.4
 
-Current release highlights:
+[2.15.4](https://github.com/tescolopio/Obsidian_FolderBridge/releases/tag/2.15.4), published September 20, 2026, is a maintenance release. Pull-request, main-branch, and release builds now share the complete `npm run validate` gate. Plugin behavior and dependencies are unchanged from 2.15.3.
 
-- **Managed TOC workflow** for UI-created local and vault mounts
-- **Mounted delete sync fix** so deleted mounted notes disappear from Obsidian immediately
-- **Community-plugin reviewer cleanup** in the TOC parser to remove a non-narrowing type assertion warning without changing runtime behavior
-- **Local UI copy validation** with a reviewer-focused text check and pre-commit hook support
+The included 2.15.3 improvements cover mounted-file refresh and cached reads, Windows/WSL path handling, watcher suppression transitions, local startup metadata batching, explorer integration, device-specific paths, and managed TOC controls. See the [changelog](CHANGELOG.md) for the complete release history.
+
+**Validation limits:** the release passed 400 automated tests across 13 files, plus lint, UI text checks, typechecking, and the production build. The full native Windows/WSL, macOS, Android, and current/oldest Obsidian host checks remain incomplete. Reporters confirmed two specific fixes on the earlier rc.2 build, not the complete 2.15.4 matrix. Automated tests do not establish native editor, Outline, metadata, or save compatibility. Back up your vault, settings, and mounted source folders; test writes on disposable copies. See the [release validation checklist](docs/RELEASE_VALIDATION.md).
+
+## Full Feature List
 
 ### Core
 
 - **Zero duplication** — files are always read and written from their real locations on disk or on the remote backend
 - **Multi-root workspaces** — mount as many folders as you want at any virtual path inside one vault
-- **Full Obsidian integration** — mounted files participate in the file explorer, Quick Switcher, Search, graph-adjacent indexing workflows, embeds, and normal vault commands
+- **Obsidian integration** — mounted files are exposed to the file explorer, Quick Switcher, Search, indexing workflows, and embeds; native editor, metadata, and save compatibility still require the checks linked above
 - **Image and PDF rendering** — embedded images and PDFs inside mounted folders render correctly, including files served through data URIs or the local file server when Obsidian's normal vault URL scheme would fail
 - **Security allowlist** — only explicitly approved real paths can be accessed; protected system directories are blocked
 - **Dry-run mode** — log write operations without executing them when testing a new setup
@@ -54,7 +55,7 @@ Current release highlights:
 - **Polling mode** — switch individual mounts to stat polling for network shares or filesystems without reliable native watch events
 - **Polling interval** — configure polling cadence independently per mount
 - **Max-files cap** — limit startup scan size for very large directory trees
-- **Suppress all watcher events** — keep a mount visible while preventing its external file events from triggering Obsidian/plugin reactions
+- **Suppress all watcher events** — prevent external file events from triggering Obsidian/plugin reactions; startup child-event replay is also suppressed, so the mount root can appear without its children after restart
 - **New file event filter** — optionally announce only Markdown files on create, reducing interference from attachment-rename plugins
 - **Visible file-type filter** — expose all files, Markdown only, or PDF only while keeping the real folder structure intact on disk
 
@@ -76,23 +77,23 @@ Current release highlights:
 
 ### Platform and Performance
 
-- **Windows hardened** — long paths, UNC/network paths, OneDrive-style workflows, reserved names, and case-insensitive comparisons are handled explicitly
+- **Windows path handling** — explicit handling for long paths, UNC/network paths, reserved names, and case-insensitive comparisons; native Windows/WSL validation remains pending
 - **Linux and macOS support** — POSIX paths work natively, and the same core adapter and watcher logic applies across desktop platforms
-- **Android support for remote mounts** — WebDAV and S3-compatible mounts work on Android with a mobile-adapted UI
+- **Android remote-mount paths** — WebDAV and S3-compatible mount options have a mobile-adapted UI; packaged Android enablement and remote access remain pending native verification
 - **Background file watcher** — file changes from mounted folders appear in Obsidian in real time when the backend supports it
 - **PathMapper cache optimisation** — active mounts are pre-normalised and sorted once so path resolution stays fast even with many mounts
 
 ### Platform Support
 
-Quick compatibility summary. For platform-specific caveats and setup notes, see [Platform Notes](#platform-notes) below.
+Implementation and validation status for 2.15.4. For platform-specific caveats and setup notes, see [Platform Notes](#platform-notes) below. Historical reports are not a substitute for testing this release.
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| Windows | ✅ Tested | Full support — long paths, UNC, NTFS quirks all handled |
-| macOS | ⚠️ Untested | POSIX code paths are implemented; not yet officially tested. Community reports welcome. |
-| Linux | ✅ Tested | POSIX paths, works including WSL |
-| Android | ✅ Stable | WebDAV and S3/B2 mounts work fully. UI auto-adapts to show only mobile-compatible mount types. See [Android Setup Guide](docs/ANDROID_SETUP.md) |
-| iOS | ❌ Not supported | Not yet tested on iOS; WebDAV may work in theory |
+| Windows | Native validation pending | Path and WSL UNC regressions have automated coverage; native enable/open/restart checks remain pending. |
+| macOS | Native validation pending | POSIX paths are implemented; ARM64 installation, file opening, and watcher checks remain pending. |
+| Linux / WSL development | Automated checks passed | Ubuntu CI and development checks do not verify native Obsidian behavior or Windows-hosted WSL mounts. |
+| Android | Native validation pending | WebDAV and S3/B2 are the intended mobile mount types; enablement and restart checks remain pending. See [Android Setup Guide](docs/ANDROID_SETUP.md). |
+| iOS | Not supported | No verified iOS support. |
 
 ---
 
@@ -419,7 +420,7 @@ The override applies only to this device; the original path is preserved for the
 
 ### Mobile (iOS / Android)
 
-**Android** — WebDAV and S3/B2 mounts are fully supported on Obsidian for Android (v2.0.0+). Connect to Nextcloud, ownCloud, a NAS, any WebDAV server, or an S3-compatible bucket from your phone — no extra apps required. Local and SFTP mounts are not available on Android due to the app sandbox. See the [Android Setup Guide](docs/ANDROID_SETUP.md) for step-by-step instructions.
+**Android** — WebDAV and S3/B2 are the intended mobile mount types, but packaged enablement, remote access, and restart behavior still need native confirmation. The loading report in [#18](https://github.com/tescolopio/Obsidian_FolderBridge/issues/18) remains open. Local and SFTP mounts are unavailable on Android. See the [Android Setup Guide](docs/ANDROID_SETUP.md) for setup and testing instructions.
 
 **iOS** — Not yet tested. WebDAV may work in theory (same code paths as Android) but is not officially supported. Feedback welcome via [GitHub Issues](https://github.com/tescolopio/Obsidian_FolderBridge/issues).
 
@@ -435,7 +436,7 @@ Obsidian → vault.adapter (Proxy) → VirtualAdapter
                                         └── path outside mounts? → original FileSystemAdapter
 ```
 
-A JavaScript `Proxy` forwards all undocumented Obsidian-internal methods transparently to the original adapter, so no Obsidian functionality is broken.
+A JavaScript `Proxy` forwards methods not handled by the virtual adapter to the original adapter. Integration also depends on private Obsidian behavior, so compatibility must be checked against the host versions in the release validation checklist.
 
 ---
 
@@ -470,8 +471,12 @@ ln -s "$(pwd)" "/path/to/vault/.obsidian/plugins/folderbridge"
 npm run dev      # Watch mode with hot-reload
 npm run build    # Production build (type-checks first)
 npm test         # Run unit tests
-npm run version  # Bump version in manifest.json and versions.json
+npm run validate # Lint, UI text checks, typecheck, production build, tests
+npm run version  # Sync manifest.json and versions.json to package.json
 ```
+
+See the [publishing guide](docs/PUBLISHING.md) for release preparation and the
+[issue triage](docs/ISSUE_TRIAGE.md) for the dated maintainer review queue.
 
 ### Project structure
 
@@ -499,7 +504,7 @@ npm run version  # Bump version in manifest.json and versions.json
 
 Contributions are welcome! Please open an issue or pull request.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+See [the contributor guide](docs/CONTRIBUTING.md) for guidelines.
 
 ---
 
@@ -509,4 +514,4 @@ MIT — see [LICENSE](LICENSE) for details.
 
 ## Attribution
 
-This plugin does not use code from other Obsidian plugins. It relies solely on the official Obsidian API and standard Node.js libraries.
+Folder Bridge uses the Obsidian API, private vault integration points, Node.js APIs, and third-party libraries including chokidar, the AWS SDK, WebDAV, and ssh2-sftp-client. See `package.json` for dependencies.
