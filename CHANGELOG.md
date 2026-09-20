@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.15.4] - 2026-09-20
+
+This maintenance release includes all previously integrated branch work and the
+CI hardening from PR #52. Folder Bridge continues making major improvements
+across the board; the runtime improvements are those shipped in 2.15.3.
+There are no additional plugin behavior or dependency changes in 2.15.4.
+
+### Changed
+- Pull-request, main-branch, and release workflows now use the same `npm run validate` gate: lint, UI text checks, TypeScript checking, production build, and tests.
+- Release builds now require lint and UI text checks; pull-request builds now include UI text checks and avoid redundant TypeScript checking.
+- Existing tag/version matching, release-note extraction, asset checks, and stable/prerelease handling are unchanged.
+
+### Validation And Known Limitations
+- The inherited automated suite contains 400 tests across 13 files. Release publication requires the complete validation gate to pass.
+- Native Windows/WSL, macOS, Android, and current/oldest Obsidian host checks remain pending. This maintenance release does not establish native editor, Outline, metadata, or save compatibility, and does not resolve the remaining suppression-policy or plugin-directory review issues.
+- Back up your vault, settings, and mounted source folders; test writes on disposable copies. Install `main.js`, `manifest.json`, and `styles.css` from this release together. See the 2.15.3 notes and `docs/RELEASE_VALIDATION.md` for outstanding checks.
+
 ## [2.15.3] - 2026-09-20
 
 Folder Bridge is making major improvements across the board. This stable release
