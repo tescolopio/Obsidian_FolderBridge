@@ -7,11 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.15.5-rc.1] - 2026-09-20
+
+This opt-in prerelease adds two fixes on top of stable 2.15.4, which remains the
+latest stable release. Back up settings and use a disposable vault with copied
+source files for testing.
+
 ### Fixed
+- The plugin could fail to load on Obsidian Mobile ([#18](https://github.com/tescolopio/Obsidian_FolderBridge/issues/18)). `webdav` was imported eagerly, and its Node build requires `util`, `node:http` and other Node modules at load time, before `onload()` and before any mobile check could run. It now loads lazily like the other optional modules and is still bundled for desktop. Contributed by @grub-basket in [#66](https://github.com/tescolopio/Obsidian_FolderBridge/pull/66).
 - A mount with "Suppress all watcher events" enabled no longer appears as an empty folder after restart ([#16](https://github.com/tescolopio/Obsidian_FolderBridge/issues/16)). Startup now indexes the mount's existing files and folders once, honoring ignore rules, file-type filters and the scan limit. Later external changes remain muted.
 
-### Known Limitations
-- The one-time index of a suppressed mount goes through Obsidian's vault change channel, so other plugins may see a burst of create events when the mount loads. Only subsequent external changes are suppressed. Check this with any attachment-management plugin before relying on it.
+### Validation And Known Limitations
+- Full validation covers 406 tests across 14 files, lint, UI text, TypeScript checking and the production build. Obsidian is mocked. The Android fix was also checked by loading the production bundle in a Node sandbox that provides only `obsidian`; that is not a device test.
+- **Android:** this should let the plugin load, but it is not confirmed on a real device. WebDAV mounts are unavailable on mobile in this build: they are skipped with a console warning instead of stopping the plugin from loading, although the mobile mount-type list still shows WebDAV. S3/B2 mounts on mobile are untested. Please report the exact Android, Obsidian and WebView versions and the first console error on #18.
+- **Desktop WebDAV** now loads lazily and needs one real check that an existing WebDAV mount still connects.
+- **Suppressed mounts:** the one-time index goes through Obsidian's vault change channel, so other plugins may see a burst of create events when the mount loads. Only later external changes are muted. Test with any attachment-management plugin.
+- Install main.js, manifest.json and styles.css from this release together. Native Windows/WSL, macOS and Android checks remain pending; see docs/RELEASE_VALIDATION.md and docs/NATIVE_TEST_RESULTS.md.
+- Not a stable release. Stable promotion needs its own version and tag.
 
 ## [2.15.4] - 2026-09-20
 

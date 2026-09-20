@@ -11,6 +11,10 @@ passed. The three published assets are `main.js` (3,396,327 bytes),
 `manifest.json` (395 bytes), and `styles.css` (8,768 bytes).
 The 2.15.4 changes are CI-only; runtime and dependencies match 2.15.3.
 
+Prerelease 2.15.5-rc.1 (2026-09-20) adds the #16 suppressed-mount indexing fix and
+the #18 lazy `webdav` load (PR #66). Neither is natively verified. It is a
+prerelease for opt-in testing; stable 2.15.4 remains the latest stable release.
+
 Use 2.15.4 for new reports and record the exact build. Earlier rc.2 results below
 remain useful evidence for their specific fixes, but do not certify changes
 added after that candidate. See [issue triage](ISSUE_TRIAGE.md) for response
