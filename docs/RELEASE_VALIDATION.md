@@ -7,8 +7,16 @@ the older PRs whose changes were already included in #42.
 
 On 2026-09-19 the maintainer approved 2.15.3-rc.2 to distribute all merged
 changes for testing. It includes the subsequent explorer integration from #44.
-Do not publish a stable release until the native gate is satisfied. The older
-2.15.3-rc.1 download does not include that explorer integration.
+The older 2.15.3-rc.1 download does not include that explorer integration.
+
+## Stable Publication Decision
+
+On 2026-09-20 the maintainer explicitly selected stable 2.15.3 publication,
+overriding the earlier requirement to wait for native results for this release.
+The release consolidates all audited branch work, including the omitted older
+behaviors described below. This authorization does not turn pending native
+checks into passes. The release notes prominently disclose the broad changes,
+backup recommendation, and outstanding native compatibility checks.
 
 ## Automated Checks
 
@@ -30,8 +38,40 @@ tests exercise both the watcher and installed adapter callback against the
 checked-in `docs/vault-onchange.txt` handler, checking stat updates, content-cache
 invalidation, and public `modify`/`raw` events. That private-handler snapshot has
 no recorded host-version provenance; it is not a substitute for native testing.
-The published rc.2 assets do not contain this fix. Build the main revision under
-test and record its commit when running the external-edit check below.
+The historical rc.2 assets do not contain this fix; stable 2.15.3 includes it.
+Record the exact revision and assets when running the external-edit check below.
+
+The stable candidate passes all 400 tests across 13 files plus lint, UI text,
+typechecking, and the production build. Full and production-only npm audits
+report zero known vulnerabilities at preparation time; this is a point-in-time
+dependency result, not a guarantee of security.
+
+## Branch And Local Artifact Audit
+
+The audit started from main `b5a8508467da018079f0c4ad844496ef46b099c8`.
+The remaining branch tips were reviewed before recording their histories:
+
+| Branch tip | Treatment |
+| --- | --- |
+| `update-obsidian-folder-bridge` / `7c5d5e6` (includes `pr-23` / `e16880f` and `pr-24` / `a4d1f85`) | Restore missing cross-device refresh/picker eligibility, override reinjection, inactive-mount notices, managed TOC fallback controls/status, labels, progress, bounded parallel removal, and log-only watcher failure reporting. Include a qualified historical devlog. Preserve newer security and lifecycle guards. |
+| `maint/fallback-real-path-reviewed` / `915084f` | Reconcile inherited omissions with the restored behavior; keep main's stronger fallback resolution and reinjection safeguards. |
+| `fix/watcher-suppression-transitions` / `fbe0563` | Already represented by squash merge #46. |
+| `fix/dependency-security` / `430ebf3` | Already represented by squash merge #48. |
+| `perf/startup-metadata-batching` / `fa07c99` | Already represented by squash merge #49. |
+| `release/2.15.3-rc.2` / `c8b90e3` | Already represented by squash merge #45; stable metadata supersedes prerelease metadata. |
+
+After porting the omitted behavior, history-only merges retain these tips without
+reapplying obsolete implementations. Other audited local and remote branch tips
+were already ancestors of main. The release PR must use a merge commit, not a
+squash merge, to preserve this ancestry.
+
+Local-only files were reviewed individually. Include the sanitized read-only
+Obsidian reviewer profile. Keep main's current release checklist and mobile-safe
+mount label implementation; the extra build test is already identical to main.
+Exclude generated JavaScript, nested checkout artifacts, and raw runtime-validation
+logs containing machine-specific paths/metadata. The reusable evaluation plan
+duplicates repository validation commands and is not needed in the release.
+Original dirty worktrees and their uncommitted files remain untouched.
 
 ## Native Release Gates
 
@@ -72,8 +112,9 @@ workflow that uses `appendBinary`.
   device overrides, stale tooltips, unload, observer replacement, and save errors.
 - Reconcile branches only after preserving and reviewing the existing uncommitted
   work. Do not sweep unrelated files into a release commit.
-- Record native results before a version bump or release. After publishing,
-  confirm BRAT/manual installation uses the tested assets.
+- Normally record native results before a version bump or release. The explicit
+  2.15.3 override above is limited to this release; continue collecting native
+  results. After publishing, confirm the downloadable assets match the tested build.
 - The community website has a FolderBridge entry, now claimed by the maintainer.
   The directory reports no matching release despite the exact prerelease tag and
   assets existing on GitHub. Prerelease filtering versus stale directory data is
@@ -86,7 +127,8 @@ workflow that uses `appendBinary`.
 
 ## Deferred Work
 
-These are not fixed by the compatibility batch: #16 suppression semantics, #20
-large-mount startup, #21 external-rename backlink updates, #32 cross-mount moves,
+These are not fully resolved by this release: #16 suppression semantics, #20
+large-mount startup (metadata batching is included, native timing and persistent
+caching are not), #21 external-rename backlink updates, #32 cross-mount moves,
 #36 native/mobile SMB, and #15 sparse NAS workflows. Each needs its own scoped
 behavior and validation plan; do not close them as part of this release.

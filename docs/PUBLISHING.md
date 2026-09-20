@@ -57,6 +57,8 @@ containing `-` as prereleases and does not mark them as latest.
 
 Prereleases are for opt-in testing with disposable vaults and backed-up sources.
 Complete the native gates in `docs/RELEASE_VALIDATION.md` before stable release.
+For 2.15.3 only, the maintainer explicitly approved publication with those native
+checks pending; the decision and required caveats are recorded in that checklist.
 For stable promotion, prepare the stable version metadata and a matching new
 tag; do not merely remove the prerelease flag from a candidate tag.
 
