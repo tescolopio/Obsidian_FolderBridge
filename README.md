@@ -55,7 +55,7 @@ The included 2.15.3 improvements cover mounted-file refresh and cached reads, Wi
 - **Polling mode** — switch individual mounts to stat polling for network shares or filesystems without reliable native watch events
 - **Polling interval** — configure polling cadence independently per mount
 - **Max-files cap** — limit startup scan size for very large directory trees
-- **Suppress all watcher events** — prevent external file events from triggering Obsidian/plugin reactions; startup child-event replay is also suppressed, so the mount root can appear without its children after restart
+- **Suppress all watcher events** — keep a mount visible while preventing later external file changes from triggering Obsidian/plugin reactions. Existing files are still indexed once when the mount loads, so other plugins may see one burst of create events at that moment
 - **New file event filter** — optionally announce only Markdown files on create, reducing interference from attachment-rename plugins
 - **Visible file-type filter** — expose all files, Markdown only, or PDF only while keeping the real folder structure intact on disk
 
