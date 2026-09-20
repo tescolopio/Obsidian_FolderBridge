@@ -1,4 +1,17 @@
 import { describe, it, expect, vi } from 'vitest';
+
+// Keep this test independent of how the `webdav` library is loaded (static
+// import today, optional-module loader if it becomes lazy): the client is
+// replaced with a stub below, so a placeholder createClient is enough.
+vi.mock('../src/runtimeNode', async importOriginal => {
+	const original = await importOriginal<typeof import('../src/runtimeNode')>();
+	return {
+		...original,
+		loadOptionalNodeModule: (id: string) =>
+			id === 'webdav' ? { createClient: () => ({}) } : original.loadOptionalNodeModule(id),
+	};
+});
+
 import { WebDAVAdapter } from '../src/WebDAVAdapter';
 
 type StubClient = {
