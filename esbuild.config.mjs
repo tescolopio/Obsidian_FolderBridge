@@ -74,6 +74,8 @@ export function loadBundledOptionalModule(moduleId) {
 				return require('@aws-sdk/client-s3');
 			case 'ssh2-sftp-client':
 				return require('ssh2-sftp-client');
+			case 'webdav':
+				return require('webdav');
 			default:
 				return null;
 		}

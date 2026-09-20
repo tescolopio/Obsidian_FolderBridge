@@ -1,8 +1,31 @@
-import { createClient, WebDAVClient, FileStat } from 'webdav';
+// Type-only import: nothing from `webdav` may be evaluated when the plugin
+// loads.  Its Node build eagerly requires `util`, `node:http`, `node:https`,
+// `node:zlib`, … (via path-posix and node-fetch), which do not exist on
+// Obsidian Mobile and would make the whole plugin fail to load.  The library
+// is loaded lazily through the optional-module shim instead, exactly like
+// chokidar, @aws-sdk/client-s3 and ssh2-sftp-client.
+import type { WebDAVClient, FileStat } from 'webdav';
 import { normalizePath } from 'obsidian';
 import { MountPoint } from './types';
 import { saveWebDAVPassword, loadWebDAVPassword, clearWebDAVPassword } from './CredentialStore';
 import { logger } from './logger';
+import { loadOptionalNodeModule } from './runtimeNode';
+
+type WebDAVModule = Pick<typeof import('webdav'), 'createClient'>;
+
+/** Load the `webdav` library on first use; null where it cannot run (mobile). */
+function loadWebDAV(): WebDAVModule | null {
+    const webdav = loadOptionalNodeModule<WebDAVModule>('webdav');
+    return typeof webdav?.createClient === 'function' ? webdav : null;
+}
+
+/** fromMount() runs on every health check; warn about a missing client once. */
+let warnedUnavailable = false;
+
+/** True when WebDAV mounts can work in this environment. */
+export function isWebDAVAvailable(): boolean {
+    return loadWebDAV() !== null;
+}
 
 /**
  * WebDAVAdapter wraps the `webdav` npm client and exposes the same
@@ -24,6 +47,9 @@ export class WebDAVAdapter {
     private baseUrl: string;
 
     constructor(webdavUrl: string, username?: string, password?: string) {
+        const webdav = loadWebDAV();
+        if (!webdav) throw new Error('webdav is unavailable in this environment');
+        const { createClient } = webdav;
         this.baseUrl = webdavUrl.replace(/\/$/, '');
         if (username && password) {
             this.client = createClient(this.baseUrl, { username, password });
@@ -53,6 +79,15 @@ export class WebDAVAdapter {
     /** Build a WebDAVAdapter from a MountPoint, using the sessionStorage password. */
     static fromMount(mount: MountPoint): WebDAVAdapter | null {
         if (!mount.webdavUrl) return null;
+        // No WebDAV client here (Obsidian Mobile): behave like a mount whose
+        // adapter could not be created instead of throwing during plugin load.
+        if (!isWebDAVAvailable()) {
+            if (!warnedUnavailable) {
+                warnedUnavailable = true;
+                logger.warn('[FolderBridge] WebDAV is unavailable in this environment; WebDAV mounts are skipped.');
+            }
+            return null;
+        }
         const password = mount.id ? WebDAVAdapter.loadPassword(mount.id) : null;
         return new WebDAVAdapter(mount.webdavUrl, mount.webdavUsername, password ?? undefined);
     }
