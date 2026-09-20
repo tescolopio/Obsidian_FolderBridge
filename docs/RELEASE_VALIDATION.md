@@ -18,6 +18,12 @@ behaviors described below. This authorization does not turn pending native
 checks into passes. The release notes prominently disclose the broad changes,
 backup recommendation, and outstanding native compatibility checks.
 
+The maintainer subsequently requested another stable release on 2026-09-20,
+after CI hardening was merged in PR #52. Maintenance release 2.15.4 retains the
+same runtime and dependencies as 2.15.3 and carries the same pending-native-test
+caveat. This release request does not establish native results or waive the gate
+for future runtime changes.
+
 ## Automated Checks
 
 Run `npm run validate` on the candidate checkout. It runs lint, UI text checks,
@@ -113,7 +119,7 @@ workflow that uses `appendBinary`.
 - Reconcile branches only after preserving and reviewing the existing uncommitted
   work. Do not sweep unrelated files into a release commit.
 - Normally record native results before a version bump or release. The explicit
-  2.15.3 override above is limited to this release; continue collecting native
+  publication decisions above cover 2.15.3 and its CI-only 2.15.4 follow-up; continue collecting native
   results. After publishing, confirm the downloadable assets match the tested build.
 - The community website has a FolderBridge entry, now claimed by the maintainer.
   The directory reports no matching release despite the exact prerelease tag and
