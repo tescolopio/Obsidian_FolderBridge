@@ -92,7 +92,7 @@ another demand to repeat an already supplied result.
 
 | Priority | Issue | Current release status | Next decision or action |
 | --- | --- | --- | --- |
-| High | [#16: suppression](https://github.com/tescolopio/Obsidian_FolderBridge/issues/16) | Runtime toggle/delivery-race fixes shipped in 2.15.3 and remain in 2.15.4. Saved suppression still skips initial child replay and can leave the tree empty. | Update the stale rc.1 status. Decide whether initial indexing should be separate from later notifications, then test that policy. Keep open. Related closed [#14](https://github.com/tescolopio/Obsidian_FolderBridge/issues/14) concerns attachment-plugin rename notifications; no new unanswered reply there. |
+| High | [#16: suppression](https://github.com/tescolopio/Obsidian_FolderBridge/issues/16) | Runtime toggle/delivery-race fixes shipped in 2.15.3 and remain in 2.15.4. In 2.15.4, saved suppression still skips initial child replay and can leave the tree empty. A fix on main after 2.15.4 (unreleased) indexes existing files once and keeps later external events muted. | Keep open until a release includes the fix and the suppressed-restart check in the [results sheet](NATIVE_TEST_RESULTS.md) passes, including with an attachment plugin. Related closed [#14](https://github.com/tescolopio/Obsidian_FolderBridge/issues/14) concerns attachment-plugin rename notifications; no new unanswered reply there. |
 | Medium | [#20: large-mount startup](https://github.com/tescolopio/Obsidian_FolderBridge/issues/20) | Bounded local metadata batching shipped. Persistent scan caching did not. The earlier comment predates this improvement. | Tell the reporter what actually shipped and request cold/warm measurements on their 19,751-file mount. Do not promise the contributor's cache design or claim the scanner benchmark measures native startup. |
 | Medium | [#21: external-rename links](https://github.com/tescolopio/Obsidian_FolderBridge/issues/21) | No reliable external rename correlation/backlink-update workflow. | Scope ambiguity handling and Obsidian link updates separately; modified-event repair is not rename support. |
 | Medium | [#32: cross-mount moves](https://github.com/tescolopio/Obsidian_FolderBridge/issues/32) | Safe transfer between vault/mount/backend boundaries is not implemented. | Design copy, verify, then delete with conflict/cancellation/failure handling before offering drag-and-drop moves. Source-data integrity makes this higher risk than cosmetic work. |
@@ -103,7 +103,7 @@ another demand to repeat an already supplied result.
 
 For #16:
 
-> Stable 2.15.4 includes the runtime suppression fixes shipped in 2.15.3: queued events are canceled on suppression and in-flight work cannot escape a toggle. The separate empty-tree behavior after restart remains unchanged because saved suppression skips initial child replay. Keeping this open while we settle and test that visibility policy; the runtime fixes do not resolve the whole report.
+> Stable 2.15.4 includes the runtime suppression fixes shipped in 2.15.3: queued events are canceled on suppression and in-flight work cannot escape a toggle. The separate empty-tree behavior after restart is unchanged in 2.15.4 because saved suppression skips initial child replay. A fix is merged to main and will ship in the next release: a suppressed mount indexes its existing files once at load and keeps later external changes muted. That one-time index can still produce a burst of create events for other plugins. Keeping this open until a release includes it and it is tested.
 
 For #20:
 
@@ -160,9 +160,9 @@ After the review above, the maintainer approved and posted the drafted comments
 for #41, #29, #18, #26, #33, #34, #35, #20, #25 and #38, each tagged with the
 `folderbridge-issue-audit-2026-09-20-stable` marker. No issue was closed or
 relabeled; #41 was deliberately left open. The #16 comment was held: a fix that
-indexes a suppressed mount's existing files on startup is on branch
-`fix/16-suppressed-initial-index` and is not released, so #16 should be updated
-with a link to that change rather than the draft above. The authenticated
+indexes a suppressed mount's existing files on startup has since been merged to
+main but is not released, so #16 should be updated with a link to that change and
+the next release rather than the 2.15.4 draft above. The authenticated
 directory steps for #25/#38 and all native runs remain pending; record native
 results in the [results sheet](NATIVE_TEST_RESULTS.md).
 
