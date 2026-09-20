@@ -162,7 +162,7 @@ workflow that uses `appendBinary`.
 
 ## Deferred Work
 
-These are not fully resolved by this release: #16 suppression semantics, #20
+These are not fully resolved by this release: #16 suppression semantics (a post-2.15.4 fix on main is unreleased and untested natively), #20
 large-mount startup (metadata batching is included, native timing and persistent
 caching are not), #21 external-rename backlink updates, #32 cross-mount moves,
 #36 native/mobile SMB, and #15 sparse NAS workflows. Each needs its own scoped

@@ -32,10 +32,6 @@ export async function replayMountContentsToVault(
     mount: MountPoint,
     deps: MountScanDependencies,
 ): Promise<MountScanResult> {
-    if (mount.watcherSuppressAllEvents) {
-        return { fileCount: 0, folderCount: 0, scanLimitHit: false, isHuge: false };
-    }
-
     let fileCount = 0;
     let folderCount = 0;
     let isHuge = false;

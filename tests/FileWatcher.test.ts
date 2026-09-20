@@ -171,6 +171,27 @@ describe('FileWatcher', () => {
             }
         });
 
+        it('keeps dropping watcher events for a persistently suppressed mount', async () => {
+            // The startup replay now indexes a suppressed mount's existing files (#16).
+            // Later external changes must stay muted.
+            vi.useFakeTimers();
+            const suppressed: MountPoint = { ...mount, watcherSuppressAllEvents: true };
+            const { app, mockOnChange, mockGetAbstractFileByPath } = makeApp();
+            mockGetAbstractFileByPath.mockReturnValue({});
+            const watcher = new FileWatcher(app, makeMapper(suppressed), () => false);
+            try {
+                watcher.startWatching(suppressed);
+                await getCallback('add')(`${suppressed.realPath}/new.md`);
+                await getCallback('change')(`${suppressed.realPath}/note.md`);
+                await getCallback('unlink')(`${suppressed.realPath}/old.md`);
+                await vi.runAllTimersAsync();
+                expect(mockOnChange).not.toHaveBeenCalled();
+            } finally {
+                watcher.stopAll();
+                vi.useRealTimers();
+            }
+        });
+
         it('keeps other mounts active and preserves per-mount suppression when global suppression ends', async () => {
             const other = mkMount('m2', 'other', '/other');
             const mapper = makeMapper(mount);

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A mount with "Suppress all watcher events" enabled no longer appears as an empty folder after restart ([#16](https://github.com/tescolopio/Obsidian_FolderBridge/issues/16)). Startup now indexes the mount's existing files and folders once, honoring ignore rules, file-type filters and the scan limit. Later external changes remain muted.
+
+### Known Limitations
+- The one-time index of a suppressed mount goes through Obsidian's vault change channel, so other plugins may see a burst of create events when the mount loads. Only subsequent external changes are suppressed. Check this with any attachment-management plugin before relying on it.
+
 ## [2.15.4] - 2026-09-20
 
 This maintenance release includes all previously integrated branch work and the

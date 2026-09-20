@@ -59,25 +59,50 @@ describe('replayMountContentsToVault', () => {
         }
     });
 
-    it('skips child replay entirely when watcher suppression is enabled', async () => {
+    it('replays existing children when watcher suppression is enabled', async () => {
+        // Suppression mutes later external notifications only. Without the initial
+        // replay the mount root would appear empty after a restart (#16).
         const mount = mkMount({ watcherSuppressAllEvents: true });
+        const stat = { type: 'file' as const, ctime: 0, mtime: 0, size: 1 };
         const deps = {
-            list: vi.fn(),
-            stat: vi.fn(),
+            list: vi.fn(async (folder: string) => folder === 'mounts/docs'
+                ? { folders: ['mounts/docs/sub'], files: ['mounts/docs/a.md'] }
+                : { folders: [], files: ['mounts/docs/sub/b.md'] }),
+            stat: vi.fn(async () => stat),
             hasAbstractFile: vi.fn(() => false),
             isIgnored: vi.fn(() => false),
             onFolderCreated: vi.fn(async () => { }),
             onFileCreated: vi.fn(async () => { }),
             onProgress: vi.fn(),
+            yieldToEventLoop: vi.fn(async () => { }),
         };
 
         const result = await replayMountContentsToVault(mount, deps);
 
-        expect(result).toEqual({ fileCount: 0, folderCount: 0, scanLimitHit: false, isHuge: false });
-        expect(deps.list).not.toHaveBeenCalled();
-        expect(deps.onFolderCreated).not.toHaveBeenCalled();
-        expect(deps.onFileCreated).not.toHaveBeenCalled();
-        expect(deps.onProgress).not.toHaveBeenCalled();
+        expect(result).toEqual({ fileCount: 2, folderCount: 1, scanLimitHit: false, isHuge: false });
+        expect(deps.onFolderCreated).toHaveBeenCalledWith('mounts/docs/sub');
+        expect(deps.onFileCreated).toHaveBeenCalledWith('mounts/docs/a.md', stat);
+        expect(deps.onFileCreated).toHaveBeenCalledWith('mounts/docs/sub/b.md', stat);
+    });
+
+    it('still applies ignore rules and the scan limit to a suppressed mount', async () => {
+        const mount = mkMount({ watcherSuppressAllEvents: true, maxFiles: 2 });
+        const files = ['skip.md', 'a.md', 'b.md', 'c.md'].map(name => `mounts/docs/${name}`);
+        const deps = {
+            list: vi.fn(async () => ({ folders: [], files })),
+            stat: vi.fn(async () => ({ type: 'file' as const, ctime: 0, mtime: 0, size: 1 })),
+            hasAbstractFile: vi.fn(() => false),
+            isIgnored: vi.fn((name: string) => name === 'skip.md'),
+            onFolderCreated: vi.fn(async () => { }),
+            onFileCreated: vi.fn(async () => { }),
+            onProgress: vi.fn(),
+            yieldToEventLoop: vi.fn(async () => { }),
+        };
+
+        const result = await replayMountContentsToVault(mount, deps);
+
+        expect(result).toMatchObject({ fileCount: 2, scanLimitHit: true });
+        expect(deps.onFileCreated).not.toHaveBeenCalledWith('mounts/docs/skip.md', expect.anything());
     });
 
     it.each([1, 5, 9])('does not read metadata beyond a scan limit of %i', async maxFiles => {

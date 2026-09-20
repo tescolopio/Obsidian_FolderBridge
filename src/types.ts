@@ -53,6 +53,13 @@ export interface MountPoint {
 	 * clipboard) are unaffected: those go through VirtualAdapter and Obsidian
 	 * fires its own internal vault events directly — the watcher is bypassed.
 	 *
+	 * Suppression does not hide the mount's existing contents. When the mount is
+	 * injected (startup, enable, re-inject), its current files and folders are
+	 * still indexed once so the file explorer is not empty. That one-time index
+	 * goes through the same `vault.onChange` channel, so other plugins may see a
+	 * burst of `create` events at that moment; only later external changes are
+	 * muted.
+	 *
 	 * You can also toggle suppression at runtime without touching this setting:
 	 *   const fb = app.plugins.getPlugin('folderbridge');
 	 *   fb.setWatcherSuppressed('mountId', true);   // mute one mount

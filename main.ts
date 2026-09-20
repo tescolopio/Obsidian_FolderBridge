@@ -2472,7 +2472,9 @@ export default class FolderBridgePlugin extends Plugin {
 			);
 		}
 		if (suppressionEnabled) {
-			new Notice(`Folder Bridge: Mounted "${mount.virtualPath}" with external file events suppressed.`);
+			// Existing files are indexed above so the tree is not empty after a restart.
+			// Only later external changes are muted, and the forced raw refresh is skipped.
+			new Notice(`Folder Bridge: Mounted ${folderCount} folders and ${fileCount} files in "${mount.virtualPath}" with later external file events suppressed.`);
 		} else {
 			new Notice(`Folder Bridge: Mounted ${folderCount} folders and ${fileCount} files in "${mount.virtualPath}".`);
 			try {
@@ -2485,7 +2487,7 @@ export default class FolderBridgePlugin extends Plugin {
 		// Restore Folder Bridge's own expansion cache after virtual folders have
 		// been injected. Obsidian restores native folder state before these paths
 		// exist, so mount folders need this late pass.
-		if (!suppressionEnabled) setTimeout(() => {
+		setTimeout(() => {
 			if (!isCurrent()) return;
 			this.applySavedExplorerExpansionState(mount);
 		}, 100);
