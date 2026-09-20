@@ -113,7 +113,8 @@ versions, candidate revision, and any console stack for each result.
 
 The full 2.15.4 native matrix remains incomplete. The two earlier-build reporter
 passes above are recorded separately; other checks below still need results.
-Existing CI runs on Ubuntu only.
+Existing CI runs on Ubuntu only. Record each run in the
+[native test results sheet](NATIVE_TEST_RESULTS.md).
 
 | Area | Reproduction | Required Result |
 | --- | --- | --- |

@@ -149,7 +149,8 @@ Suggested reply after reviewing, without claiming dashboard actions occurred:
 2. Correct stale candidate/hold wording and communicate the partial fixes in #16/#20.
 3. Complete authenticated directory review for #25/#38.
 4. Run the native 2.15.4 external-edit/save check, then Android, WSL, footnote, label,
-   hidden-file, and oldest-host checks in [release validation](RELEASE_VALIDATION.md).
+   hidden-file, and oldest-host checks in [release validation](RELEASE_VALIDATION.md),
+   recording each run in the [native test results sheet](NATIVE_TEST_RESULTS.md).
 5. Resolve #16's visibility policy and measure #20 on the real workload before
    committing to broader features.
 
