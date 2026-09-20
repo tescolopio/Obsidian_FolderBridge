@@ -32,10 +32,10 @@ export async function replayMountContentsToVault(
     mount: MountPoint,
     deps: MountScanDependencies,
 ): Promise<MountScanResult> {
-    if (mount.watcherSuppressAllEvents) {
-        return { fileCount: 0, folderCount: 0, scanLimitHit: false, isHuge: false };
-    }
-
+    // `watcherSuppressAllEvents` deliberately does NOT short-circuit this scan.
+    // The setting mutes *later external* changes reported by the file watcher;
+    // the contents that already exist when the mount is injected must still be
+    // surfaced, otherwise a suppressed mount shows up as an empty folder.
     let fileCount = 0;
     let folderCount = 0;
     let isHuge = false;

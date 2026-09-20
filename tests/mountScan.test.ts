@@ -59,25 +59,29 @@ describe('replayMountContentsToVault', () => {
         }
     });
 
-    it('skips child replay entirely when watcher suppression is enabled', async () => {
+    it('still replays existing contents when watcher suppression is enabled (#16)', async () => {
+        // Suppression mutes later external watcher events. It must not hide
+        // the files that already exist when the mount is injected, or the
+        // mount appears as an empty folder.
         const mount = mkMount({ watcherSuppressAllEvents: true });
         const deps = {
-            list: vi.fn(),
-            stat: vi.fn(),
+            list: vi.fn(async (folderPath: string) => folderPath === 'mounts/docs'
+                ? { folders: ['mounts/docs/subfolder'], files: ['mounts/docs/note.md'] }
+                : { folders: [], files: ['mounts/docs/subfolder/child.md'] }),
+            stat: vi.fn(async () => ({ type: 'file' as const, ctime: 0, mtime: 0, size: 1 })),
             hasAbstractFile: vi.fn(() => false),
             isIgnored: vi.fn(() => false),
             onFolderCreated: vi.fn(async () => { }),
             onFileCreated: vi.fn(async () => { }),
-            onProgress: vi.fn(),
+            yieldToEventLoop: vi.fn(async () => { }),
         };
 
         const result = await replayMountContentsToVault(mount, deps);
 
-        expect(result).toEqual({ fileCount: 0, folderCount: 0, scanLimitHit: false, isHuge: false });
-        expect(deps.list).not.toHaveBeenCalled();
-        expect(deps.onFolderCreated).not.toHaveBeenCalled();
-        expect(deps.onFileCreated).not.toHaveBeenCalled();
-        expect(deps.onProgress).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ fileCount: 2, folderCount: 1, scanLimitHit: false });
+        expect(deps.onFolderCreated).toHaveBeenCalledWith('mounts/docs/subfolder');
+        expect(deps.onFileCreated).toHaveBeenCalledWith('mounts/docs/note.md', expect.any(Object));
+        expect(deps.onFileCreated).toHaveBeenCalledWith('mounts/docs/subfolder/child.md', expect.any(Object));
     });
 
     it.each([1, 5, 9])('does not read metadata beyond a scan limit of %i', async maxFiles => {
