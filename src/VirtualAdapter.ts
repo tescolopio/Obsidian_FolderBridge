@@ -926,6 +926,23 @@ export class VirtualAdapter {
 	// trash / remove
 	// ------------------------------------------------------------------
 
+	/**
+	 * Mount roots whose real deletion the user already confirmed in
+	 * trashSystem().  When the system trash then fails and Obsidian falls
+	 * back to trashLocal(), the confirmation is consumed instead of asking
+	 * the same question a second time.  Entries expire quickly so a stale
+	 * confirmation can never silently authorise a later, unrelated delete.
+	 */
+	private confirmedRootDeletions: Map<string, number> = new Map();
+	private static readonly ROOT_DELETION_CONFIRM_TTL_MS = 5000;
+
+	private consumeRootDeletionConfirmation(mountId: string): boolean {
+		const confirmedAt = this.confirmedRootDeletions.get(mountId);
+		this.confirmedRootDeletions.delete(mountId);
+		return confirmedAt !== undefined &&
+			Date.now() - confirmedAt <= VirtualAdapter.ROOT_DELETION_CONFIRM_TTL_MS;
+	}
+
 	private async handleRootMountDeletion(rootMount: MountPoint): Promise<boolean> {
 		const action = await this.onMountRootDelete(rootMount);
 		if (action === 'cancel') {
@@ -980,11 +997,15 @@ export class VirtualAdapter {
 			// and it then calls trashLocal(), which keeps the data recoverable.
 			const electron = loadOptionalNodeModule<{ shell?: { trashItem(p: string): Promise<void> } }>('electron');
 			const shell = electron?.shell;
-			if (!shell?.trashItem) return false;
+			if (!shell?.trashItem) {
+				if (rootMount) this.confirmedRootDeletions.set(rootMount.id, Date.now());
+				return false;
+			}
 			try {
 				await shell.trashItem(realPath);
 			} catch (e) {
 				logger.warn(`[FolderBridge] System trash unavailable for "${realPath}"; falling back to the vault .trash folder.`, e);
+				if (rootMount) this.confirmedRootDeletions.set(rootMount.id, Date.now());
 				return false;
 			}
 			await this.notifyDelete(normalizedPath);
@@ -1037,7 +1058,7 @@ export class VirtualAdapter {
 
 	async trashLocal(normalizedPath: string, system?: boolean): Promise<void> {
 		const rootMount = this.pathMapper.getMountByVirtualPath(normalizedPath);
-		if (rootMount) {
+		if (rootMount && !this.consumeRootDeletionConfirmation(rootMount.id)) {
 			const handled = await this.handleRootMountDeletion(rootMount);
 			if (handled) return;
 		}

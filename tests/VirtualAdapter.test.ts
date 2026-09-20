@@ -292,3 +292,37 @@ describe('VirtualAdapter trash on local mounts', () => {
         expect(onDelete).not.toHaveBeenCalled();
     });
 });
+
+describe('VirtualAdapter mount-root trash fallback', () => {
+    it('asks about deleting a mount root only once when the system trash is unavailable', async () => {
+        const mountDir = await fs.mkdtemp(path.join(os.tmpdir(), 'folderbridge-root-mount-'));
+        const vaultDir = await fs.mkdtemp(path.join(os.tmpdir(), 'folderbridge-root-vault-'));
+        try {
+            const mount = makeMount(mountDir);
+            const mapper = new PathMapper();
+            mapper.update([mount], 'test-device');
+            const onRootDelete = vi.fn().mockResolvedValue('delete');
+            const adapter = new VirtualAdapter(
+                { getBasePath: () => vaultDir },
+                mapper,
+                new SecurityManager([mountDir]),
+                false,
+                10 * 1024 * 1024,
+                onRootDelete,
+                async () => { },
+                () => false,
+            );
+            await fs.writeFile(path.join(mountDir, 'note.md'), '# keep me');
+
+            // Obsidian's vault.trash(): try the system trash, then fall back.
+            if (!(await adapter.trashSystem('Mounted'))) await adapter.trashLocal('Mounted');
+
+            expect(onRootDelete).toHaveBeenCalledTimes(1);
+            const trashed = path.join(vaultDir, '.trash', path.basename(mountDir), 'note.md');
+            expect(await fs.readFile(trashed, 'utf-8')).toBe('# keep me');
+        } finally {
+            await fs.rm(mountDir, { recursive: true, force: true });
+            await fs.rm(vaultDir, { recursive: true, force: true });
+        }
+    });
+});
