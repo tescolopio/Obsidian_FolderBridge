@@ -2,8 +2,10 @@
 
 This guide describes the intended Android remote-mount workflow for **Nextcloud, NAS, WebDAV servers, and S3-compatible buckets**.
 
-**Current release: 2.15.4 stable.** Android plugin loading and remote access still
-need native confirmation; [issue #18](https://github.com/tescolopio/Obsidian_FolderBridge/issues/18)
+**Current stable release: 2.15.4.** Prerelease 2.15.5-rc.1 fixes a plugin load failure on
+Android caused by the WebDAV library, but **WebDAV mounts do not work on Android in that
+build** (they are skipped, not crashed), and S3/B2 on mobile is untested. Android plugin
+loading and remote access still need native confirmation; [issue #18](https://github.com/tescolopio/Obsidian_FolderBridge/issues/18)
 remains open. These setup steps are not a verified Android compatibility claim.
 Back up settings and test writes only against disposable remote files. See the
 [release validation checklist](RELEASE_VALIDATION.md).

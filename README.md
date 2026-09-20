@@ -10,7 +10,9 @@ Extends Obsidian's single-root vault by letting you mount external folders as se
 
 The included 2.15.3 improvements cover mounted-file refresh and cached reads, Windows/WSL path handling, watcher suppression transitions, local startup metadata batching, explorer integration, device-specific paths, and managed TOC controls. See the [changelog](CHANGELOG.md) for the complete release history.
 
-**Validation limits:** the release passed 400 automated tests across 13 files, plus lint, UI text checks, typechecking, and the production build. The full native Windows/WSL, macOS, Android, and current/oldest Obsidian host checks remain incomplete. Reporters confirmed two specific fixes on the earlier rc.2 build, not the complete 2.15.4 matrix. Automated tests do not establish native editor, Outline, metadata, or save compatibility. Back up your vault, settings, and mounted source folders; test writes on disposable copies. See the [release validation checklist](docs/RELEASE_VALIDATION.md).
+**Prerelease for testing:** [2.15.5-rc.1](https://github.com/tescolopio/Obsidian_FolderBridge/releases/tag/2.15.5-rc.1) is an opt-in prerelease, not the latest stable release. It fixes the plugin failing to load on Android (#18) and mounts with suppressed watcher events appearing empty after restart (#16). WebDAV mounts do not work on Android in that build. Use a disposable vault and back up your sources.
+
+**Validation limits (stable 2.15.4):** the release passed 400 automated tests across 13 files, plus lint, UI text checks, typechecking, and the production build. The full native Windows/WSL, macOS, Android, and current/oldest Obsidian host checks remain incomplete. Reporters confirmed two specific fixes on the earlier rc.2 build, not the complete 2.15.4 matrix. Automated tests do not establish native editor, Outline, metadata, or save compatibility. Back up your vault, settings, and mounted source folders; test writes on disposable copies. See the [release validation checklist](docs/RELEASE_VALIDATION.md).
 
 ## Full Feature List
 
@@ -92,7 +94,7 @@ Implementation and validation status for 2.15.4. For platform-specific caveats a
 | Windows | Native validation pending | Path and WSL UNC regressions have automated coverage; native enable/open/restart checks remain pending. |
 | macOS | Native validation pending | POSIX paths are implemented; ARM64 installation, file opening, and watcher checks remain pending. |
 | Linux / WSL development | Automated checks passed | Ubuntu CI and development checks do not verify native Obsidian behavior or Windows-hosted WSL mounts. |
-| Android | Native validation pending | WebDAV and S3/B2 are the intended mobile mount types; enablement and restart checks remain pending. See [Android Setup Guide](docs/ANDROID_SETUP.md). |
+| Android | Native validation pending | The plugin failed to load on Android in 2.15.4 (#18); prerelease 2.15.5-rc.1 fixes the cause but is unconfirmed on a device. WebDAV mounts are unavailable on mobile in that build; S3/B2 is untested. See [Android Setup Guide](docs/ANDROID_SETUP.md). |
 | iOS | Not supported | No verified iOS support. |
 
 ---

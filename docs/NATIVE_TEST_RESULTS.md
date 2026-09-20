@@ -44,15 +44,20 @@ Fill in once per test machine or device and refer to it by its label.
 | 6 | Auto-label checkbox persists after reopen and restart | #35 | | Not run | |
 | 7 | Virtual path input visible and editable, narrow and desktop widths | #41 | | Not run | |
 | 8 | Footnotes render and refresh in a mounted note | #34 | | Not run | |
-| 9 | Android: enable packaged build, open a WebDAV or S3 note, restart | #18 | | Not run | |
+| 9 | Android: enable packaged build (2.15.5-rc.1 or later), open an S3 note, restart | #18 | | Not run | |
 | 10 | Explorer: context-menu mount, tooltips, expansion, unload | #39 | | Not run | |
 | 11 | External edit then in-app save preserves external changes (body, headings, frontmatter, Outline) | #47 | | Not run | |
 | 12 | Suppressed mount after restart: children appear, later external edits stay muted, other plugins behave | #16 | | Not run | |
+| 13 | Desktop WebDAV regression: an existing WebDAV mount still connects, lists and opens a note after the lazy `webdav` load | #66 | | Not run | |
 
 Notes on specific rows:
 
 - **Row 11** is the one that can lose data. Use only a copy of a note, and repeat it
   on the oldest Obsidian version you can run as well as the current one.
+- **Row 9** applies to 2.15.5-rc.1 or later; 2.15.4 fails to load on Android. WebDAV
+  mounts are expected to be unavailable there, so use an S3/B2 mount for the note
+  test and record whether S3 works on mobile. The first console error matters most:
+  if it still fails, copy it to #18.
 - **Row 12** needs a build that includes the #16 fix; it does not apply to 2.15.4.
   Also test with an attachment-management plugin enabled (see #14), because the
   initial index of a suppressed mount does emit one burst of vault `create`
