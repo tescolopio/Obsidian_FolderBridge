@@ -313,3 +313,28 @@ describe('SecurityManager', () => {
 	// Note: the Windows case-insensitive comparison (normalizeForComparison) is
 	// tested in OSHelpers.test.ts. SecurityManager delegates to that function.
 });
+
+describe('SecurityManager deviceOverrides validation', () => {
+	const sec = new SecurityManager([]);
+
+	it('accepts a mount whose device overrides are ordinary absolute paths', () => {
+		const mount = { ...mkMount('Ext', '/data/notes'), deviceOverrides: { 'dev-a': '/mnt/other/notes' } };
+		expect(sec.validateMount(mount, [])).toBeNull();
+	});
+
+	it('rejects a protected system path hidden in a device override', () => {
+		const mount = { ...mkMount('Ext', '/data/notes'), deviceOverrides: { 'dev-a': '/etc' } };
+		expect(sec.validateMount(mount, [])).toMatch(/protected system path/);
+	});
+
+	it('rejects a relative device override path', () => {
+		const mount = { ...mkMount('Ext', '/data/notes'), deviceOverrides: { 'dev-a': '../../secret' } };
+		expect(sec.validateMount(mount, [])).toMatch(/absolute/);
+	});
+
+	it('rejects non-string and non-object overrides from untrusted JSON', () => {
+		expect(sec.validateDeviceOverrides({ 'dev-a': 42 })).toMatch(/path string/);
+		expect(sec.validateDeviceOverrides(['/etc'])).toMatch(/must be an object/);
+		expect(sec.validateDeviceOverrides(undefined)).toBeNull();
+	});
+});
