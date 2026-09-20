@@ -80,25 +80,33 @@ export async function replayMountContentsToVault(
                 await recursivelyNotifyVault(folder);
             }
 
-            for (let i = 0; i < list.files.length; i++) {
-                if (scanLimitHit) break;
+            const metadataConcurrency = !mount.mountType || mount.mountType === 'local' || mount.mountType === 'vault' ? 8 : 1;
+            let fileIndex = 0;
+            while (fileIndex < list.files.length && !scanLimitHit) {
+                const batch: string[] = [];
+                const remaining = scanLimit > 0 ? scanLimit - fileCount - folderCount : metadataConcurrency;
+                const batchSize = Math.min(metadataConcurrency, remaining);
+                while (fileIndex < list.files.length && batch.length < batchSize) {
+                    if (fileIndex > 0 && fileIndex % 100 === 0) {
+                        await yieldToEventLoop();
+                    }
+                    const file = list.files[fileIndex++];
+                    const fileName = file.split('/').pop() || '';
+                    const fileMountRelPath = file.startsWith(mountVirtualPath + '/')
+                        ? file.slice(mountVirtualPath.length + 1)
+                        : undefined;
 
-                const file = list.files[i];
-                if (i > 0 && i % 100 === 0) {
-                    await yieldToEventLoop();
+                    if (deps.isIgnored(fileName, mount, fileMountRelPath)) continue;
+                    if (!isVisibleFileInMount(file, mount)) continue;
+                    if (!deps.hasAbstractFile(file)) batch.push(file);
                 }
 
-                const fileName = file.split('/').pop() || '';
-                const fileMountRelPath = file.startsWith(mountVirtualPath + '/')
-                    ? file.slice(mountVirtualPath.length + 1)
-                    : undefined;
-
-                if (deps.isIgnored(fileName, mount, fileMountRelPath)) continue;
-                if (!isVisibleFileInMount(file, mount)) continue;
-
-                if (!deps.hasAbstractFile(file)) {
-                    const stat = await deps.stat(file);
-                    await deps.onFileCreated(file, stat);
+                const stats = await Promise.allSettled(batch.map(async file => deps.stat(file)));
+                for (const [batchIndex, file] of batch.entries()) {
+                    const result = stats[batchIndex];
+                    if (result.status === 'rejected') throw result.reason;
+                    if (deps.hasAbstractFile(file)) continue;
+                    await deps.onFileCreated(file, result.value);
                     fileCount++;
                     if (scanLimit > 0 && fileCount + folderCount >= scanLimit) {
                         scanLimitHit = true;

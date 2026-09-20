@@ -111,6 +111,34 @@ npm run validate
 ```
 - Runs the UI text check, production build, and full test suite in one command
 
+#### Mount scan benchmark
+
+```bash
+node scripts/benchmark-mount-scan.mjs a0600814ce4530b2c0eb2f0b4051d38bb8b5daef
+```
+
+Compares the scanner at the given Git revision with the working-tree scanner.
+The revision defaults to `HEAD`; pass a pre-optimization revision after committing
+the optimization. Run after installing dependencies, from a checkout with that
+revision available locally.
+
+The script creates 20,000 zero-byte image files across 100 directories under the
+OS temporary directory, alternates baseline/current order over five trials each,
+and removes its fixture afterward. It checks identical notification order, file
+and folder counts, and metadata-read counts, then prints per-trial timings and
+medians as JSON. The scanner's normal event-loop yields remain enabled.
+
+On Linux with Node 22.14.0, the serial baseline above measured a 1,215 ms median
+versus 784 ms for batches of eight local metadata reads, a 35.5% reduction. Both
+performed 20,000 metadata reads; the change overlaps I/O rather than eliminating
+it. WebDAV, S3, and SFTP scans remain serial.
+
+This is a scanner microbenchmark, not an Obsidian startup measurement: vault
+notifications are no-ops, file contents are not read, and OS caches are not
+flushed. It does not model a cold disk, NAS latency, watcher startup, or Obsidian
+indexing. Native before/after measurements on representative mounts are still
+required; there is no timing threshold in CI.
+
 #### Optional pre-commit hook
 ```bash
 npm run hooks:install

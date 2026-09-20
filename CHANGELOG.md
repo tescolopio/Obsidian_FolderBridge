@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+- Startup scans overlap up to eight metadata reads for local and vault mounts while keeping vault notifications ordered and sequential. Remote mounts retain serial reads; scan limits, filtering, and suppression remain enforced. No persistent cache is introduced.
+- A scanner-only benchmark of 20,000 files across 100 folders measured a median of 784 ms versus 1,215 ms for the serial baseline (35.5% lower). This Linux temporary-filesystem result uses no-op vault notifications and does not establish native Obsidian startup improvement. See the Development Guide for reproduction and limitations.
+
 ### Security
 - Updated esbuild to 0.28.2 and Vitest to 4.1.11, retaining the Node 20-compatible test runner and TypeScript 5.3.3.
 - Refreshed vulnerable transitive dependencies, including the AWS XML helpers and WebDAV's brace expansion. Full and production-only npm audits report zero known vulnerabilities, down from 13 affected package entries (7 high, 5 moderate, 1 low) in the full baseline audit.
