@@ -1,12 +1,18 @@
 # Android / Mobile Setup Guide
 
-Use FolderBridge on your Android phone to access files stored on your **Nextcloud, NAS, WebDAV server, or S3-compatible bucket** — no computer required, no cable, no sync client.
+This guide describes the intended Android remote-mount workflow for **Nextcloud, NAS, WebDAV servers, and S3-compatible buckets**.
+
+**Current release: 2.15.4 stable.** Android plugin loading and remote access still
+need native confirmation; [issue #18](https://github.com/tescolopio/Obsidian_FolderBridge/issues/18)
+remains open. These setup steps are not a verified Android compatibility claim.
+Back up settings and test writes only against disposable remote files. See the
+[release validation checklist](RELEASE_VALIDATION.md).
 
 ---
 
 ## The pitch
 
-If you run Nextcloud at home, have a NAS, or keep work files on a server, FolderBridge on mobile gives you full read/write access to those files inside Obsidian — from anywhere with internet (or WiFi).
+The WebDAV/S3 adapters are intended to expose remote files inside Obsidian on mobile. Confirm enablement, reading, writing, and restart behavior in your environment before relying on this workflow.
 
 ```
 Your Android phone

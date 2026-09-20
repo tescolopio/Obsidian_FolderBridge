@@ -1,12 +1,23 @@
 # Publishing & Release Checklist
 
-This document defines every step required to release a new version of FolderBridge and pass all automated and manual checks for the Obsidian Community Plugin directory.
+This document covers GitHub release preparation and the separate Obsidian Community Plugin directory review. Passing repository checks does not establish directory approval or native compatibility.
+
+## Current Published Release
+
+[2.15.4](https://github.com/tescolopio/Obsidian_FolderBridge/releases/tag/2.15.4)
+was published on 2026-09-20 from `29b43c806f2cf3892abea64abd26c8592fdb7b25`.
+It is the latest stable release, not a prerelease. It adds CI validation changes;
+runtime behavior and dependencies are unchanged from 2.15.3. The release contains
+`main.js`, `manifest.json`, and `styles.css`; install all three together.
+See [release validation](RELEASE_VALIDATION.md) for evidence and remaining checks.
 
 ---
 
 ## 1. Pre-Release Code Checks (Bot Scan)
 
-The Obsidian community-plugin bot validates these automatically when a PR is opened against [`obsidianmd/obsidian-releases`](https://github.com/obsidianmd/obsidian-releases).
+Use these as local preflight checks, then inspect the current directory scan.
+The older `obsidianmd/obsidian-releases` PR is historical submission evidence,
+not the current entry-management workflow or proof of approval.
 
 ### Automated file checks
 
@@ -35,13 +46,15 @@ The Obsidian community-plugin bot validates these automatically when a PR is ope
 | Floating `Promise`s | ⚠️ Reviewer flag | ✅ Wrapped with `void` operator |
 | `async` event handlers returning `Promise` where `void` expected | ⚠️ Reviewer flag | ✅ Wrapped with synchronous `void (async () => { … })()` |
 
-Run to verify locally:
+Run the same gate used by pull-request, main-branch, and release CI:
 
 ```sh
-npm run lint        # ESLint (catches most of the above)
-npm run build       # TypeScript type check + esbuild production bundle
-npm test            # Vitest unit tests
+npm ci
+npm run validate    # Lint, UI text, TypeScript check, production bundle, tests
 ```
+
+The pattern table is a preflight aid, not a fresh reviewer certification.
+Record any directory scan findings separately from the local lint result.
 
 ---
 
@@ -89,37 +102,36 @@ Each bullet must be specific enough for a user to understand what changed and wh
 
 ### 2b. Run the version bump
 
-Stage the changelog, then run `npm version`. The `version` lifecycle hook updates `manifest.json` and `versions.json` automatically. `.npmrc` is configured with `tag-version-prefix=` so the git tag is created **without a `v` prefix** — this is required for the GitHub Actions release workflow to fire.
+Prepare metadata in a clean release checkout, preserving unrelated work. Use an
+explicit version with `--no-git-tag-version` so metadata can be reviewed and
+validated before a release tag is created. The `version` lifecycle hook updates
+`manifest.json` and `versions.json`; review its staged changes as well.
 
 ```sh
-# Stage your changelog entry first
-git add CHANGELOG.md
-
-# For a patch release (bug fixes only):
-npm version patch
-
-# For a minor release (new features, backwards-compatible):
-npm version minor
-
-# For a major release (breaking changes):
-npm version major
+# Replace X.Y.Z with the approved stable or prerelease version.
+npm version X.Y.Z --no-git-tag-version
+npm run validate
+git diff
+git diff --cached
 ```
 
-`npm version` will:
-1. Bump `package.json`, `manifest.json`, `versions.json`
-2. Commit all staged files with message `Release X.Y.Z`
-3. Create git tag `X.Y.Z` (**no `v` prefix** — critical for the release workflow)
+Confirm `package.json`, `package-lock.json`, `manifest.json`, `versions.json`, and
+the changelog agree. Commit only the reviewed release files and merge the release
+PR after its checks pass. Tag the validated merged revision, not an older local
+branch or a dirty development checkout.
 
-> ⚠️ **Never** run `npm version --no-git-tag-version` and manually `git tag vX.Y.Z`. The `v` prefix breaks the `release.yml` trigger pattern `[0-9]*.[0-9]*.[0-9]*`, so the GitHub release with assets will never be created.
+Tags must match the version exactly, **without a `v` prefix**. The workflow uses
+the pattern `[0-9]*.[0-9]*.[0-9]*`. Do not replace an existing published tag.
 
-### 2c. Push the commit and tag
+### 2c. Publish the Approved Tag
 
 ```sh
-git push && git push origin X.Y.Z
+git tag X.Y.Z <validated-merged-commit>
+git push origin X.Y.Z
 ```
 
 The `release.yml` GitHub Actions workflow triggers automatically on the `X.Y.Z` tag. It will:
-1. Install deps, run tests, build `main.js`
+1. Install with `npm ci`, then run `npm run validate` (lint, UI text, typecheck, production build, tests)
 2. Validate tag matches `manifest.json` version  
 3. Extract release notes from `CHANGELOG.md`
 4. Create the GitHub release and attach `main.js`, `manifest.json`, `styles.css`
@@ -132,7 +144,9 @@ The `release.yml` GitHub Actions workflow triggers automatically on the `X.Y.Z` 
 
 ## 3. Obsidian Community Plugin Guidelines Summary
 
-These are the reviewer criteria drawn from the [official plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines). All must be satisfied before submitting to `obsidianmd/obsidian-releases`.
+Use the current [developer policies](https://docs.obsidian.md/community-directory/developer-policies)
+and [plugin submission requirements](https://docs.obsidian.md/community-directory/submission-requirements-for-plugins)
+alongside these local reminders. The directory review is separate from GitHub release CI.
 
 ### Required files
 
@@ -171,25 +185,19 @@ These are the reviewer criteria drawn from the [official plugin guidelines](http
 
 ## 4. Submitting to the Community Plugin Directory
 
-This only needs to be done once (initial submission). Subsequent releases only require new GitHub release tags.
+Folder Bridge already has a web listing. Do not create a duplicate submission
+because the historical PR is inaccessible. Follow the current
+[entry-management guide](https://docs.obsidian.md/community-directory/manage-entry):
 
-1. Fork [`obsidianmd/obsidian-releases`](https://github.com/obsidianmd/obsidian-releases)
-2. Add an entry to `community-plugins.json`:
+1. Sign in with the maintainer's Obsidian account and open Folder Bridge under **Your entries**.
+2. Select **Check for new releases** to refresh the published 2.15.4 release.
+3. Use **Review branch** with the exact release tag or commit for a preview scan.
+4. Address errors, then use **Request review** and record its result.
+5. Verify actual in-app search and installation before closing #25 or #38.
 
-```json
-{
-  "id": "folderbridge",
-  "name": "Folder Bridge",
-  "author": "Timmothy Escolopio",
-  "description": "Adds external folders to your vault as seamless, native-feeling directories. Supports local filesystem, WebDAV, S3/Backblaze B2, and SFTP mounts.",
-  "repo": "tescolopio/Obsidian_FolderBridge",
-  "branch": "main"
-}
-```
-
-3. Open a PR — the bot will auto-validate and comment results
-4. Ensure the latest GitHub release tag matches `manifest.json` `"version"` exactly
-5. Address any bot or reviewer comments
+The official registry contained no `folderbridge` entry when checked on
+2026-09-20. A web listing, successful build, or uploaded GitHub assets alone do
+not prove in-app availability. BRAT/manual installation remains the documented route.
 
 ---
 
@@ -198,14 +206,16 @@ This only needs to be done once (initial submission). Subsequent releases only r
 ```
 [ ] manifest.json version updated
 [ ] package.json version updated
+[ ] package-lock.json version updated
 [ ] versions.json entry added
 [ ] CHANGELOG.md entry written with root-cause detail for fixes
-[ ] npm run lint — no errors
-[ ] npm run build — succeeds, main.js generated
-[ ] npm test — all tests pass
-[ ] Commit: "chore: release vX.Y.Z"
-[ ] Tag: git tag X.Y.Z && git push origin X.Y.Z  (no "v" prefix)
+[ ] npm ci and npm run validate pass on the candidate checkout
+[ ] Native results recorded, or explicit release-specific exception and caveats documented
+[ ] Release preparation reviewed and merged; merged revision validated
+[ ] Tag validated merged commit as X.Y.Z and push that tag (no "v" prefix)
 [ ] GitHub release created with main.js, manifest.json, styles.css attached
-[ ] Release set as "Latest"
-[ ] Release notes written (copy from CHANGELOG)
+[ ] Downloaded assets match the tested build and release manifest version
+[ ] Stable marked Latest; prerelease marked prerelease and not Latest
+[ ] Published notes match CHANGELOG and retain known limitations
+[ ] Directory release/review status checked separately; no assumed approval
 ```
