@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Updated esbuild to 0.28.2 and Vitest to 4.1.11, retaining the Node 20-compatible test runner and TypeScript 5.3.3.
+- Refreshed vulnerable transitive dependencies, including the AWS XML helpers and WebDAV's brace expansion. Full and production-only npm audits report zero known vulnerabilities, down from 13 affected package entries (7 high, 5 moderate, 1 low) in the full baseline audit.
+- Lint, UI text checks, typechecking, production build, and all 363 tests pass. These changes do not alter the published 2.15.3-rc.2 assets; native Obsidian validation remains pending.
+
 ### Fixed
 - Drop watcher events received during suppression immediately, cancel pending change notifications when suppression starts, and prevent in-flight metadata reads or cache refreshes from escaping a suppression toggle. Applies to per-mount and global runtime suppression; new events resume normally after unmuting.
 - Added regression coverage for saved suppression changes taking effect without restart and surviving reload. Existing startup behavior is unchanged: saved suppression skips child-file replay, so mounted folders may appear empty. Native macOS confirmation for #16 remains pending.
