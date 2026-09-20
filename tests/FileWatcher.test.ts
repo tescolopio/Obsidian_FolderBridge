@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { App } from 'obsidian';
+import * as obsidian from 'obsidian';
 import { FileWatcher } from '../src/FileWatcher';
 import { PathMapper } from '../src/PathMapper';
+import { logger } from '../src/logger';
 import type { MountPoint } from '../src/types';
 
 // ── Chokidar mock ─────────────────────────────────────────────────────────────
@@ -238,16 +240,30 @@ describe('FileWatcher', () => {
             expect(mockChokidarWatch).toHaveBeenCalledTimes(2);
         });
 
-        it('degrades cleanly when chokidar cannot be loaded', () => {
+        it('logs without a user-facing notice when chokidar cannot be loaded', () => {
+            const failure = new Error('chokidar is unavailable in this environment');
+            const notice = vi.spyOn(obsidian, 'Notice');
+            const warning = vi.spyOn(logger, 'warn').mockImplementation(() => { });
             FileWatcher._loadChokidar = () => {
-                throw new Error('chokidar is unavailable in this environment');
+                throw failure;
             };
 
             const { app } = makeApp();
             const fw = new FileWatcher(app, makeMapper(mount), () => false);
 
-            expect(() => fw.startWatching(mount)).not.toThrow();
-            expect(mockChokidarWatch).not.toHaveBeenCalled();
+            try {
+                expect(() => fw.startWatching(mount)).not.toThrow();
+                expect(() => fw.startWatching(mount)).not.toThrow();
+                expect(mockChokidarWatch).not.toHaveBeenCalled();
+                expect(notice).not.toHaveBeenCalled();
+                expect(warning).toHaveBeenCalledTimes(2);
+                expect(warning).toHaveBeenCalledWith(
+                    `[FolderBridge] File watcher unavailable for mount ${mount.virtualPath}:`, failure,
+                );
+            } finally {
+                notice.mockRestore();
+                warning.mockRestore();
+            }
         });
     });
 

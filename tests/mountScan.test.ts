@@ -68,6 +68,7 @@ describe('replayMountContentsToVault', () => {
             isIgnored: vi.fn(() => false),
             onFolderCreated: vi.fn(async () => { }),
             onFileCreated: vi.fn(async () => { }),
+            onProgress: vi.fn(),
         };
 
         const result = await replayMountContentsToVault(mount, deps);
@@ -76,6 +77,7 @@ describe('replayMountContentsToVault', () => {
         expect(deps.list).not.toHaveBeenCalled();
         expect(deps.onFolderCreated).not.toHaveBeenCalled();
         expect(deps.onFileCreated).not.toHaveBeenCalled();
+        expect(deps.onProgress).not.toHaveBeenCalled();
     });
 
     it.each([1, 5, 9])('does not read metadata beyond a scan limit of %i', async maxFiles => {
@@ -89,6 +91,7 @@ describe('replayMountContentsToVault', () => {
             isIgnored: vi.fn(() => false),
             onFolderCreated: vi.fn(async () => { }),
             onFileCreated: vi.fn(async () => { }),
+            onProgress: vi.fn(),
             yieldToEventLoop: vi.fn(async () => { }),
         };
 
@@ -97,6 +100,8 @@ describe('replayMountContentsToVault', () => {
         expect(result).toMatchObject({ folderCount: 1, fileCount: maxFiles - 1, scanLimitHit: true });
         expect(deps.stat).toHaveBeenCalledTimes(maxFiles - 1);
         expect(deps.onFileCreated).toHaveBeenCalledTimes(maxFiles - 1);
+        expect(deps.onProgress).toHaveBeenCalledTimes(maxFiles);
+        expect(deps.onProgress).toHaveBeenLastCalledWith({ folderCount: 1, fileCount: maxFiles - 1 });
     });
 
     it('filters ignored, invisible and existing files before reading metadata', async () => {
@@ -108,6 +113,7 @@ describe('replayMountContentsToVault', () => {
             isIgnored: vi.fn((name: string) => name === 'ignored.md'),
             onFolderCreated: vi.fn(async () => { }),
             onFileCreated: vi.fn(async () => { }),
+            onProgress: vi.fn(),
             yieldToEventLoop: vi.fn(async () => { }),
         };
 
@@ -116,6 +122,7 @@ describe('replayMountContentsToVault', () => {
         expect(result.fileCount).toBe(1);
         expect(deps.stat).toHaveBeenCalledExactlyOnceWith(files[3]);
         expect(deps.onFileCreated).toHaveBeenCalledWith(files[3], null);
+        expect(deps.onProgress).toHaveBeenCalledExactlyOnceWith({ fileCount: 1, folderCount: 0 });
     });
 
     it('does not duplicate a file added while a metadata batch is pending', async () => {
@@ -157,6 +164,7 @@ describe('replayMountContentsToVault', () => {
             isIgnored: vi.fn(() => false),
             onFolderCreated: vi.fn(async () => { }),
             onFileCreated: vi.fn(async () => { }),
+            onProgress: vi.fn(),
             onError: vi.fn(),
             yieldToEventLoop: vi.fn(async () => { }),
         };
@@ -167,6 +175,72 @@ describe('replayMountContentsToVault', () => {
         expect(result.fileCount).toBe(1);
         expect(deps.onFileCreated).toHaveBeenCalledExactlyOnceWith(files[0], null);
         expect(deps.onError).toHaveBeenCalledExactlyOnceWith('mounts/docs', failure);
+        expect(deps.onProgress).toHaveBeenCalledExactlyOnceWith({ fileCount: 1, folderCount: 0 });
+    });
+
+    it('reports completed creations in traversal order before scanning finishes', async () => {
+        const events: string[] = [];
+        const snapshots: { fileCount: number; folderCount: number }[] = [];
+        const result = await replayMountContentsToVault(mkMount(), {
+            list: async folder => folder === 'mounts/docs'
+                ? { folders: ['mounts/docs/sub'], files: ['mounts/docs/root.md'] }
+                : { folders: [], files: ['mounts/docs/sub/child.md'] },
+            stat: async () => null,
+            hasAbstractFile: () => false,
+            isIgnored: () => false,
+            onFolderCreated: async path => {
+                expect(snapshots).toEqual([]);
+                await Promise.resolve();
+                events.push(`created:${path}`);
+            },
+            onFileCreated: async path => {
+                expect(snapshots[snapshots.length - 1]).toEqual({ fileCount: snapshots.length - 1, folderCount: 1 });
+                await Promise.resolve();
+                events.push(`created:${path}`);
+            },
+            onProgress: progress => {
+                snapshots.push(progress);
+                events.push(`progress:${progress.fileCount}:${progress.folderCount}`);
+            },
+            yieldToEventLoop: async () => { },
+        });
+
+        expect(snapshots).toEqual([
+            { fileCount: 0, folderCount: 1 },
+            { fileCount: 1, folderCount: 1 },
+            { fileCount: 2, folderCount: 1 },
+        ]);
+        expect(events).toEqual([
+            'created:mounts/docs/sub', 'progress:0:1',
+            'created:mounts/docs/sub/child.md', 'progress:1:1',
+            'created:mounts/docs/root.md', 'progress:2:1',
+        ]);
+        expect(result).toMatchObject(snapshots[snapshots.length - 1]);
+    });
+
+    it.each(['file', 'folder'] as const)('does not report progress for a failed %s creation', async kind => {
+        const failure = new Error('creation failed');
+        const onProgress = vi.fn();
+        const onError = vi.fn();
+        const failCreation = async () => { await Promise.resolve(); throw failure; };
+        const result = await replayMountContentsToVault(mkMount(), {
+            list: async () => ({
+                folders: kind === 'folder' ? ['mounts/docs/sub'] : [],
+                files: kind === 'file' ? ['mounts/docs/note.md'] : [],
+            }),
+            stat: async () => null,
+            hasAbstractFile: () => false,
+            isIgnored: () => false,
+            onFolderCreated: failCreation,
+            onFileCreated: failCreation,
+            onProgress,
+            onError,
+            yieldToEventLoop: async () => { },
+        });
+
+        expect(result).toMatchObject({ fileCount: 0, folderCount: 0 });
+        expect(onProgress).not.toHaveBeenCalled();
+        expect(onError).toHaveBeenCalledExactlyOnceWith('mounts/docs', failure);
     });
 
     it.each(['webdav', 's3', 'sftp'] as const)('keeps %s metadata reads serial', async mountType => {

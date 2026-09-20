@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.15.3] - 2026-09-20
+
+Folder Bridge is making major improvements across the board. This stable release
+consolidates the compatibility, cross-device mounting, explorer, watcher,
+performance, and dependency-security work from the development branches and
+both 2.15.3 release candidates.
+
+**Upgrade caveat:** These are substantial changes to filesystem integration.
+Back up your vault, plugin settings, and mounted source folders before upgrading,
+and try write operations on disposable copies first. Stable publication was
+explicitly approved while native Windows/WSL, macOS, Android, and oldest/current
+Obsidian host checks remain pending. Automated tests do not establish native
+compatibility or guarantee editor/save behavior. Known limitations are listed below.
+
+### Added
+- Local mount and managed TOC fallback paths, with per-device override precedence, fallback browse/save controls, active-source status, and clearer labels. Refresh commands and mount pickers now include eligible cross-device mounts; setting an override replays the mounted tree.
+- File-explorer mount indicators and source-path details, context-menu mounting into an unused child destination, and persistent mounted-folder expansion state.
+- Live scan counts with throttled notice updates, removal progress and bounded parallel removal of indexed entries, preserving child-before-parent ordering and cancellation safeguards. Unmounting removes virtual entries, not source files.
+- Binary append support for local mounts, with explicit rejection for unsupported remote mounts.
+- A sanitized historical cross-device development log and a read-only maintainer PR-review profile. Generated files and machine-specific validation artifacts are not included.
+
+### Changed
+- Updated Obsidian typings to 1.13.1 while retaining legacy settings rendering and feature-detecting destructive-button styling. Minimum host metadata remains unchanged, not newly verified.
+- Corrected optional-module bundling for Windows/UNC paths and removed the Linux-only esbuild dependency. Disabled chokidar's native fsevents backend to avoid incompatible Electron bindings; native macOS verification remains pending.
+- Watcher-backend failures are logged without a popup. If watching is unavailable, external changes require manual refresh; mounted access still works independently of the watcher.
+- Clarified BRAT/manual installation, narrow settings layouts, and automatic folder-name labels without requiring Node on mobile.
+
 ### Performance
 - Startup scans overlap up to eight metadata reads for local and vault mounts while keeping vault notifications ordered and sequential. Remote mounts retain serial reads; scan limits, filtering, and suppression remain enforced. No persistent cache is introduced.
 - A scanner-only benchmark of 20,000 files across 100 folders measured a median of 784 ms versus 1,215 ms for the serial baseline (35.5% lower). This Linux temporary-filesystem result uses no-op vault notifications and does not establish native Obsidian startup improvement. See the Development Guide for reproduction and limitations.
@@ -14,12 +41,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 - Updated esbuild to 0.28.2 and Vitest to 4.1.11, retaining the Node 20-compatible test runner and TypeScript 5.3.3.
 - Refreshed vulnerable transitive dependencies, including the AWS XML helpers and WebDAV's brace expansion. Full and production-only npm audits report zero known vulnerabilities, down from 13 affected package entries (7 high, 5 moderate, 1 low) in the full baseline audit.
-- Lint, UI text checks, typechecking, production build, and all 363 tests pass. These changes do not alter the published 2.15.3-rc.2 assets; native Obsidian validation remains pending.
+- Dependency updates are included in this stable release; the historical rc.2 assets remain unchanged.
 
 ### Fixed
+- Mounted cached reads now use the virtual adapter. Successful mounted binary writes and text appends no longer fall through to the vault adapter.
+- Startup scans and watcher events honor configured hidden-file exclusions. Trailing separators and Windows/WSL paths are normalized while preserving protected-path checks for extended Windows and ambiguous POSIX paths.
+- Managed TOC changes preserve destination entries, clear disabled fallback configuration, and reject stale asynchronous resolutions. Refresh retains active fallback routing; updated remote adapters are replaced before rescanning.
+- Explorer tooltip, observer, expansion-save, and unload handling now reject stale work, preserve native attributes, and support retryable saves.
+- Resolved community-review lint and typing errors, including sentence-case handling without sentence-case rule-disable comments.
 - Translate mounted-file changes to `vault.onChange('modified', ...)` in both the watcher and adapter write callback. The old `file-changed` event bypassed stat updates and content-cache invalidation in the recorded vault handler. Regression tests now verify both paths emit public `modify` and `raw` events; native editor, Outline, and save behavior still require validation.
 - Drop watcher events received during suppression immediately, cancel pending change notifications when suppression starts, and prevent in-flight metadata reads or cache refreshes from escaping a suppression toggle. Applies to per-mount and global runtime suppression; new events resume normally after unmuting.
 - Added regression coverage for saved suppression changes taking effect without restart and surviving reload. Existing startup behavior is unchanged: saved suppression skips child-file replay, so mounted folders may appear empty. Native macOS confirmation for #16 remains pending.
+
+### Validation And Known Limitations
+- Full validation passes 400 tests across 13 files, lint, UI text checks, TypeScript checking, and the production build. Tests use mocked Obsidian; the captured private vault handler has no recorded host-version provenance.
+- Native platform checks, the separate macOS file-opening report, and Community Plugins approval/in-app availability remain unverified. Stable publication does not close those issues.
+- Saved watcher suppression can leave the mounted tree empty after restart. Cross-mount moves, external-rename backlink updates, persistent large-mount caching, native/mobile SMB, and sparse NAS workflows remain deferred.
+- Install `main.js`, `manifest.json`, and `styles.css` from this release together. Report the exact build, device/OS, Obsidian version, reproduction steps, and outcome. See `docs/RELEASE_VALIDATION.md` for the outstanding checks and branch audit.
 
 ## [2.15.3-rc.2] - 2026-09-19
 
@@ -79,11 +117,6 @@ source folders and test with disposable files before using write operations.
 - Joel's separate macOS file-opening report still needs reproduction and diagnostics. Cross-mount moves, external-rename backlinks, large-mount caching, suppression policy, native mobile SMB, and sparse NAS workflows remain deferred.
 - Install the three assets from this release together: `main.js`, `manifest.json`, and `styles.css`. Stable 2.15.2 remains the latest stable release.
 - Follow `docs/RELEASE_VALIDATION.md` before promoting a candidate to stable; do not infer Community Plugins registry acceptance from this prerelease.
-
-## [2.15.3] - Unreleased
-
-### Fixed
-- **Sentence-case compliance without disable comments** — replaced every `// eslint-disable-next-line obsidianmd/ui/sentence-case` directive with template literals that contain at least one `${}` interpolation (which causes the rule to skip the string entirely). Affected files: `main.ts`, `src/ui/MountManagerModal.ts`, `src/ui/WelcomeModal.ts`. Each problem string now uses a locally-scoped `const` (e.g. `const webdav = 'WebDAV'`) so its value is interpolated into the template. The `MountManagerModal` constructor now accepts a `pluginName` string argument (passed from all call sites in `main.ts`) giving notice strings a plugin-name prefix via `this.pluginName`. Result: 0 `obsidianmd/ui/sentence-case` errors and 0 disable directives — satisfying the review bot's hard requirement that the rule cannot be disabled.
 
 ## [2.15.2] - 2026-03-18
 

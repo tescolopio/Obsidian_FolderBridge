@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { App, PluginManifest, TFile, TFolder } from 'obsidian';
+import { App, FuzzySuggestModal, Notice, PluginManifest, Setting, TFile, TFolder } from 'obsidian';
 import FolderBridgePlugin from '../main';
 import { PathMapper } from '../src/PathMapper';
 import { SecurityManager } from '../src/SecurityManager';
@@ -11,11 +11,60 @@ import { SFTPAdapter } from '../src/SFTPAdapter';
 import { DEFAULT_SETTINGS, MountPoint } from '../src/types';
 import { serializeTocConfig } from '../src/TocConfig';
 import { checkPathAccessible } from '../src/OSHelpers';
+import { browseFolderOnDisk } from '../src/ui/MountManagerModal';
+import { replayMountContentsToVault } from '../src/mountScan';
 import { promises as fs } from 'fs';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 
 vi.mock('../main', () => import('../main' + '.ts'));
+
+vi.mock('obsidian', async importOriginal => {
+    const original = await importOriginal<typeof import('obsidian')>();
+    const mocked = {
+        ...original,
+        Notice: class extends original.Notice {
+            setMessage = vi.fn();
+        },
+        FuzzySuggestModal: class extends original.FuzzySuggestModal<MountPoint> {
+            setPlaceholder() { return this; }
+            open() { }
+            getItems() { return []; }
+            getItemText() { return ''; }
+            onChooseItem() { }
+        },
+        Setting: class {
+            name = '';
+            desc = '';
+            settingEl: HTMLElement;
+            constructor(container: HTMLElement) { this.settingEl = container.createDiv(); }
+            setName(value: string) { this.name = value; return this; }
+            setDesc(value: string) { this.desc = value; return this; }
+            setHeading() { return this; }
+            addToggle() { return this; }
+            addButton() { return this; }
+            addExtraButton() { return this; }
+            addText() { return this; }
+            addDropdown() { return this; }
+        },
+    };
+    return {
+        ...mocked,
+        Notice: Object.assign(vi.fn(mocked.Notice), { prototype: mocked.Notice.prototype }),
+        Setting: Object.assign(vi.fn(mocked.Setting), { prototype: mocked.Setting.prototype }),
+    };
+});
+
+vi.mock('../src/ui/MountManagerModal', async importOriginal => ({
+    ...await importOriginal<typeof import('../src/ui/MountManagerModal')>(),
+    browseFolderOnDisk: vi.fn().mockResolvedValue(null),
+    getMountStatus: vi.fn().mockResolvedValue({ reachable: true, readOnly: false }),
+}));
+
+vi.mock('../src/mountScan', async importOriginal => {
+    const original = await importOriginal<typeof import('../src/mountScan')>();
+    return { ...original, replayMountContentsToVault: vi.fn(original.replayMountContentsToVault) };
+});
 
 vi.mock('../src/OSHelpers', async importOriginal => ({
     ...await importOriginal<typeof import('../src/OSHelpers')>(),
@@ -90,8 +139,65 @@ async function makePlugin(mounts: MountPoint[] = [], source = '', fallback = '')
     return { plugin, app, files, events, saveData };
 }
 
+class SettingsElement {
+    children: SettingsElement[] = [];
+    text = '';
+    value = '';
+    tag = '';
+    onclick?: () => void;
+    dataset = {};
+    classList = { add: vi.fn() };
+    createEl(tag: string, options: { text?: string } = {}) {
+        const element = new SettingsElement();
+        element.tag = tag;
+        element.text = options.text ?? '';
+        this.children.push(element);
+        return element;
+    }
+    createDiv() { return this.createEl('div'); }
+    createSpan(options: { text?: string } = {}) { return this.createEl('span', options); }
+    empty() { this.children = []; }
+    addClass() { }
+    appendText() { }
+    setAttribute() { }
+    addEventListener() { }
+    descendants(): SettingsElement[] { return this.children.flatMap(child => [child, ...child.descendants()]); }
+}
+
+async function loadCommands(plugin: FolderBridgePlugin, app: App) {
+    const commands = new Map<string, () => void>();
+    let layoutReady!: () => void;
+    let tab!: { display(): void; containerEl: HTMLElement; renderMountRow(container: HTMLElement, mount: MountPoint): void };
+    const internals = plugin as unknown as {
+        installVirtualAdapter(): void;
+        setupExplorerHighlighting(): void;
+        startHealthChecks(): void;
+    };
+    vi.spyOn(plugin, 'loadSettings').mockResolvedValue(undefined);
+    vi.spyOn(plugin.fileServer, 'start').mockResolvedValue(false);
+    vi.spyOn(internals, 'installVirtualAdapter').mockImplementation(() => { });
+    vi.spyOn(internals, 'setupExplorerHighlighting').mockImplementation(() => { });
+    vi.spyOn(internals, 'startHealthChecks').mockImplementation(() => { });
+    plugin.settings.showStatusBar = false;
+    plugin.settings.hasSeenOnboarding = true;
+    Object.assign(plugin, {
+        addRibbonIcon: () => ({ addClass: vi.fn() }),
+        addSettingTab: (value: typeof tab) => { tab = value; },
+        addCommand: (command: { id: string; callback: () => void }) => commands.set(command.id, command.callback),
+        registerEvent: vi.fn(),
+    });
+    Object.assign(app.workspace, {
+        on: vi.fn(),
+        onLayoutReady: (callback: () => void) => { layoutReady = callback; },
+    });
+    await plugin.onload();
+    return { commands, layoutReady, tab };
+}
+
 describe('main fallback regressions', () => {
     beforeEach(() => {
+        vi.mocked(Notice).mockClear();
+        vi.mocked(Setting).mockClear();
         vi.mocked(checkPathAccessible).mockClear();
         vi.mocked(checkPathAccessible).mockImplementation(path => Promise.resolve({ accessible: path !== '/missing', readOnly: false }));
         vi.spyOn(fs, 'readFile').mockResolvedValue(serializeTocConfig([]));
@@ -658,6 +764,244 @@ describe('main fallback regressions', () => {
         } as unknown as FileWatcher;
         await plugin.updateMount('docs', { ...mount('docs', '/missing'), fallbackRealPath: '/new-root' });
         expect(starts).toEqual(['/new-root']);
+    });
+
+    it('includes foreign fallback and override mounts in refresh and all three pickers', async () => {
+        const mounts = [
+            { ...mount('fallback'), deviceId: 'other', fallbackRealPath: '/fallback' },
+            { ...mount('override'), deviceId: 'other', deviceOverrides: { desktop: '/override' } },
+            { ...mount('inactive'), deviceId: 'other' },
+        ];
+        const { plugin, app } = await makePlugin(mounts);
+        const { commands } = await loadCommands(plugin, app);
+        const replay = vi.spyOn(plugin, 'notifyVaultMountAdded').mockResolvedValue(undefined);
+        commands.get('refresh-mounts')!();
+        await vi.waitFor(() => expect(replay).toHaveBeenCalledTimes(2));
+        expect(replay.mock.calls.map(([entry]) => entry.id)).toEqual(['fallback', 'override']);
+        const selections: string[][] = [];
+        vi.spyOn(FuzzySuggestModal.prototype, 'open').mockImplementation(function (this: FuzzySuggestModal<MountPoint>) {
+            selections.push(this.getItems().map(entry => entry.id));
+        });
+        for (const command of ['toggle-mount', 'toggle-readonly-mount', 'toggle-watcher-suppression-mount']) {
+            commands.get(command)!();
+        }
+        expect(selections).toEqual(Array.from({ length: 3 }, () => ['fallback', 'override']));
+    });
+
+    it.each([false, true])('only warns about actually inactive foreign mounts (allow foreign: %s)', async allowForeign => {
+        const { plugin, app } = await makePlugin([{ ...mount('foreign'), deviceId: 'other' }]);
+        plugin.settings.allowForeignMounts = allowForeign;
+        const { layoutReady } = await loadCommands(plugin, app);
+        vi.spyOn(plugin, 'notifyVaultMountAdded').mockResolvedValue(undefined);
+        layoutReady();
+        await vi.waitFor(() => expect((plugin as unknown as { startHealthChecks: ReturnType<typeof vi.fn> }).startHealthChecks).toHaveBeenCalled());
+        const warnings = vi.mocked(Notice).mock.calls.filter(([message]) => String(message).includes('inactive here'));
+        expect(warnings).toHaveLength(allowForeign ? 0 : 1);
+    });
+
+    it.each([false, true])('throttles live scan counts and preserves final counts only while current (cancelled: %s)', async cancelled => {
+        const existing = mount('docs');
+        const { plugin } = await makePlugin([existing]);
+        const started = deferred<void>();
+        const released = deferred<void>();
+        const clock = vi.spyOn(performance, 'now').mockReturnValue(0);
+        let progress!: (result: { fileCount: number; folderCount: number }) => void;
+        let hugeMount!: () => void;
+        vi.mocked(replayMountContentsToVault).mockImplementationOnce(async (_mount, deps) => {
+            progress = deps.onProgress!;
+            hugeMount = deps.onHugeMount!;
+            started.resolve();
+            await released.promise;
+            return { fileCount: 7, folderCount: 4, scanLimitHit: false, isHuge: true };
+        });
+        const injection = plugin.notifyVaultMountAdded(existing);
+        await started.promise;
+        const notice = vi.mocked(Notice).mock.results.at(-1)!.value as Notice & { setMessage: ReturnType<typeof vi.fn> };
+        const hiding = vi.spyOn(notice, 'hide');
+        progress({ fileCount: 3, folderCount: 1 });
+        expect(notice.setMessage).toHaveBeenLastCalledWith('Folder Bridge: Scanning "docs"... 1 folders, 3 files');
+        clock.mockReturnValue(99);
+        for (let item = 0; item < 1000; item++) progress({ fileCount: 4, folderCount: 2 });
+        expect(notice.setMessage).toHaveBeenCalledOnce();
+        clock.mockReturnValue(100);
+        progress({ fileCount: 4, folderCount: 2 });
+        expect(notice.setMessage).toHaveBeenCalledTimes(2);
+        expect(notice.setMessage).toHaveBeenLastCalledWith('Folder Bridge: Scanning "docs"... 2 folders, 4 files');
+        hugeMount();
+        expect(notice.setMessage).toHaveBeenCalledTimes(3);
+        expect(notice.setMessage).toHaveBeenLastCalledWith('Folder Bridge: "docs" is very large. This may take a moment...');
+        if (cancelled) await plugin.notifyVaultMountRemoved(existing);
+        notice.setMessage.mockClear();
+        clock.mockReturnValue(200);
+        progress({ fileCount: 5, folderCount: 2 });
+        expect(notice.setMessage).toHaveBeenCalledTimes(cancelled ? 0 : 1);
+        clock.mockReturnValue(201);
+        progress({ fileCount: 6, folderCount: 3 });
+        expect(notice.setMessage).toHaveBeenCalledTimes(cancelled ? 0 : 1);
+        hugeMount();
+        expect(notice.setMessage).toHaveBeenCalledTimes(cancelled ? 0 : 2);
+        released.resolve();
+        await injection;
+        expect(hiding).toHaveBeenCalledOnce();
+        const completions = vi.mocked(Notice).mock.calls.filter(([message]) => String(message).startsWith('Folder Bridge: Mounted '));
+        expect(completions).toHaveLength(cancelled ? 0 : 1);
+        if (!cancelled) expect(completions[0][0]).toBe('Folder Bridge: Mounted 4 folders and 7 files in "docs".');
+    });
+
+    it('hides the scan notice if replay rejects', async () => {
+        const { plugin } = await makePlugin([mount('docs')]);
+        const hiding = vi.spyOn(Notice.prototype, 'hide');
+        vi.mocked(replayMountContentsToVault).mockRejectedValueOnce(new Error('scan failed'));
+        await expect(plugin.notifyVaultMountAdded(mount('docs'))).rejects.toThrow('scan failed');
+        expect(hiding).toHaveBeenCalledOnce();
+    });
+
+    it('removes siblings in parallel but waits for children before removing their parents', async () => {
+        const existing = mount('docs');
+        const { plugin, app, files, events } = await makePlugin([existing]);
+        const first = Object.assign(new TFile(), { path: 'docs/sub/deep/first.md' });
+        const second = Object.assign(new TFile(), { path: 'docs/sub/deep/second.md' });
+        const deep = Object.assign(new TFolder(), { path: 'docs/sub/deep', children: [first, second] });
+        const sub = Object.assign(new TFolder(), { path: 'docs/sub', children: [deep] });
+        const root = Object.assign(new TFolder(), { path: 'docs', children: [sub] });
+        for (const entry of [first, second, deep, sub, root]) files.set(entry.path, entry);
+        const released = deferred<void>();
+        const onChange = (app.vault as unknown as { onChange: ReturnType<typeof vi.fn<(event: string, path: string) => Promise<void>>> }).onChange;
+        const original = onChange.getMockImplementation()!;
+        onChange.mockImplementation(async (event: string, path: string) => {
+            if (path === first.path) await released.promise;
+            await original(event, path);
+        });
+        const hiding = vi.spyOn(Notice.prototype, 'hide');
+
+        const removal = plugin.notifyVaultMountRemoved(existing);
+        await vi.waitFor(() => expect(events).toEqual(['file-removed:docs/sub/deep/second.md']));
+        expect(onChange).toHaveBeenCalledTimes(2);
+        released.resolve();
+        await removal;
+
+        expect(events.slice(2)).toEqual(['folder-removed:docs/sub/deep', 'folder-removed:docs/sub', 'folder-removed:docs']);
+        expect(app.vault.adapter.list).not.toHaveBeenCalled();
+        expect(hiding).toHaveBeenCalledOnce();
+        expect(vi.mocked(Notice).mock.calls.some(([message]) => String(message).includes('Unmounted "docs"'))).toBe(true);
+    });
+
+    it('drains failed removal batches and hides progress without removing ancestors', async () => {
+        const existing = mount('docs');
+        const { plugin, app, files, events } = await makePlugin([existing]);
+        const first = Object.assign(new TFile(), { path: 'docs/first.md' });
+        const second = Object.assign(new TFile(), { path: 'docs/second.md' });
+        files.set('docs', Object.assign(new TFolder(), { path: 'docs', children: [first, second] }));
+        files.set(first.path, first);
+        files.set(second.path, second);
+        const released = deferred<void>();
+        const onChange = (app.vault as unknown as { onChange: ReturnType<typeof vi.fn> }).onChange;
+        onChange.mockImplementation(async (_event: string, path: string) => {
+            if (path === first.path) throw new Error('removal failed');
+            await released.promise;
+        });
+        const hiding = vi.spyOn(Notice.prototype, 'hide');
+        const removal = plugin.notifyVaultMountRemoved(existing);
+        const rejected = expect(removal).rejects.toThrow('removal failed');
+        await Promise.resolve();
+        expect(hiding).not.toHaveBeenCalled();
+        released.resolve();
+        await rejected;
+        expect(hiding).toHaveBeenCalledOnce();
+        expect(onChange).toHaveBeenCalledTimes(2);
+        expect(events).toEqual([]);
+    });
+
+    it('cancels remaining removals when a newer injection takes ownership', async () => {
+        const existing = mount('docs');
+        const { plugin, app, files, events } = await makePlugin([existing]);
+        const child = Object.assign(new TFile(), { path: 'docs/old.md' });
+        files.set('docs', Object.assign(new TFolder(), { path: 'docs', children: [child] }));
+        files.set(child.path, child);
+        const released = deferred<void>();
+        const onChange = (app.vault as unknown as { onChange: ReturnType<typeof vi.fn<(event: string, path: string) => Promise<void>>> }).onChange;
+        const original = onChange.getMockImplementation()!;
+        onChange.mockImplementation(async (event: string, path: string) => {
+            if (event === 'file-removed') await released.promise;
+            await original(event, path);
+        });
+        const removal = plugin.notifyVaultMountRemoved(existing);
+        await plugin.notifyVaultMountAdded(existing);
+        released.resolve();
+        await removal;
+        expect(files.has('docs')).toBe(true);
+        expect(events).not.toContain('folder-removed:docs');
+        expect(vi.mocked(Notice).mock.calls.some(([message]) => String(message).includes('Unmounted'))).toBe(false);
+    });
+
+    it.each(['fallback', 'override'] as const)('labels the effective %s path accurately', async source => {
+        const existing = {
+            ...mount('docs', '/missing'), fallbackRealPath: '/fallback',
+            deviceOverrides: source === 'override' ? { desktop: '/override' } : undefined
+        };
+        const { plugin, app } = await makePlugin([existing]);
+        const { tab } = await loadCommands(plugin, app);
+        if (source === 'fallback') plugin.pathMapper.setResolvedPath(existing.id, '/fallback');
+        tab.renderMountRow(new SettingsElement() as unknown as HTMLElement, existing);
+        const setting = vi.mocked(Setting).mock.results.at(-1)!.value as { desc: string };
+        expect(setting.desc).toContain(source === 'override' ? 'Path override for this device: /override' : 'Using fallback path: /fallback');
+    });
+
+    it('browses, saves, displays and clears a fallback TOC with a Windows primary filename', async () => {
+        const { plugin, app } = await makePlugin([], 'C:\\Vault\\custom.json');
+        const { tab } = await loadCommands(plugin, app);
+        const container = new SettingsElement();
+        tab.containerEl = container as unknown as HTMLElement;
+        tab.display();
+        const browse = container.descendants().find(element => element.text === 'Browse...')!;
+        const row = container.descendants().find(element => element.children.includes(browse))!;
+        const input = row.children.find(element => element.tag === 'input')!;
+        vi.mocked(browseFolderOnDisk).mockResolvedValueOnce('/linux');
+        browse.onclick!();
+        await vi.waitFor(() => expect(input.value).toBe('/linux/custom.json'));
+        vi.mocked(checkPathAccessible).mockImplementation(candidate => Promise.resolve({ accessible: candidate === '/linux/custom.json', readOnly: false }));
+        row.children.find(element => element.text === 'Set fallback')!.onclick!();
+        await vi.waitFor(() => expect(container.descendants().some(element => element.text === 'Using fallback TOC file on this device: /linux/custom.json')).toBe(true));
+        expect(plugin.settings.managedTocSourceFallback).toBe('/linux/custom.json');
+        expect(plugin.resolvedManagedTocSource).toBe('/linux/custom.json');
+        const newRow = container.descendants().find(element => element.children.some(child => child.text === 'Set fallback'))!;
+        newRow.children.find(element => element.tag === 'input')!.value = '';
+        newRow.children.find(element => element.text === 'Set fallback')!.onclick!();
+        await vi.waitFor(() => expect(plugin.resolvedManagedTocSource).toBe('C:\\Vault\\custom.json'));
+        expect(plugin.settings.managedTocSourceFallback).toBe('');
+    });
+
+    it('replays files when the device-path control changes a foreign mount', async () => {
+        const existing = { ...mount('docs'), deviceId: 'other', deviceOverrides: { desktop: '/old-root' } };
+        const { plugin, app, files, events, saveData } = await makePlugin([existing]);
+        const child = Object.assign(new TFile(), { path: 'docs/old.md' });
+        files.set('docs', Object.assign(new TFolder(), { path: 'docs', children: [child] }));
+        files.set(child.path, child);
+        vi.mocked(app.vault.adapter.list).mockResolvedValue({ files: ['docs/new.md'], folders: [] });
+        const startWatching = vi.fn();
+        plugin.fileWatcher = { stopWatching: vi.fn(), startWatching } as unknown as FileWatcher;
+
+        await plugin.setDeviceOverride('docs', '/new-root');
+
+        expect(events.slice(0, 2)).toEqual(['file-removed:docs/old.md', 'folder-removed:docs']);
+        expect(files.has('docs/old.md')).toBe(false);
+        expect(files.has('docs/new.md')).toBe(true);
+        expect(plugin.pathMapper.getEffectiveRealPath(plugin.settings.mountPoints[0])).toBe('/new-root');
+        expect(plugin.settings.allowlist).toContain('/new-root');
+        expect(startWatching).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ deviceOverrides: { desktop: '/new-root' } }));
+        expect(saveData).toHaveBeenCalled();
+    });
+
+    it('does not replay disabled mounts or grant rejected device paths', async () => {
+        const existing = { ...mount('docs'), enabled: false };
+        const { plugin } = await makePlugin([existing]);
+        const replay = vi.spyOn(plugin, 'notifyVaultMountAdded');
+        await plugin.setDeviceOverride(existing.id, '/valid');
+        expect(replay).not.toHaveBeenCalled();
+        vi.mocked(plugin.security.validateMount).mockReturnValue('Invalid mount');
+        await plugin.setDeviceOverride(existing.id, '/rejected');
+        expect(plugin.settings.allowlist).not.toContain('/rejected');
+        expect(plugin.settings.mountPoints[0].deviceOverrides?.desktop).toBe('/valid');
     });
 
     it('orders overlapping edits to the same mount while a root probe is pending', async () => {
