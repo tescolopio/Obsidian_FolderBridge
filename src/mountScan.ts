@@ -11,6 +11,7 @@ export interface MountScanDependencies {
     isIgnored(name: string, mount: MountPoint, mountRelativePath?: string): boolean;
     onFolderCreated(path: string): Promise<void>;
     onFileCreated(path: string, stat: VaultStat): Promise<void>;
+    onProgress?(result: { fileCount: number; folderCount: number }): void;
     onHugeMount?(): void;
     onError?(folderPath: string, error: unknown): void;
     yieldToEventLoop?(this: void): Promise<void>;
@@ -70,6 +71,7 @@ export async function replayMountContentsToVault(
                 if (!deps.hasAbstractFile(folder)) {
                     await deps.onFolderCreated(folder);
                     folderCount++;
+                    deps.onProgress?.({ fileCount, folderCount });
                     if (scanLimit > 0 && fileCount + folderCount >= scanLimit) {
                         scanLimitHit = true;
                         return;
@@ -108,6 +110,7 @@ export async function replayMountContentsToVault(
                     if (deps.hasAbstractFile(file)) continue;
                     await deps.onFileCreated(file, result.value);
                     fileCount++;
+                    deps.onProgress?.({ fileCount, folderCount });
                     if (scanLimit > 0 && fileCount + folderCount >= scanLimit) {
                         scanLimitHit = true;
                         break;
