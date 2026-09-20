@@ -154,6 +154,20 @@ Suggested reply after reviewing, without claiming dashboard actions occurred:
 5. Resolve #16's visibility policy and measure #20 on the real workload before
    committing to broader features.
 
+## Follow-Up Actions (2026-09-20)
+
+After the review above, the maintainer approved and posted the drafted comments
+for #41, #29, #18, #26, #33, #34, #35, #20, #25 and #38, each tagged with the
+`folderbridge-issue-audit-2026-09-20-stable` marker. No issue was closed or
+relabeled; #41 was deliberately left open. The #16 comment was held: a fix that
+indexes a suppressed mount's existing files on startup is on branch
+`fix/16-suppressed-initial-index` and is not released, so #16 should be updated
+with a link to that change rather than the draft above. The authenticated
+directory steps for #25/#38 and all native runs remain pending; record native
+results in the [results sheet](NATIVE_TEST_RESULTS.md).
+
+## Scope Of The Original Audit
+
 This audit made documentation changes only. It did not rerun runtime tests,
 perform a new dependency audit, execute native Obsidian checks, publish a release,
 or change GitHub conversations. Release CI evidence is linked in the validation
