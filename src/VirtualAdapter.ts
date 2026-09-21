@@ -926,6 +926,23 @@ export class VirtualAdapter {
 	// trash / remove
 	// ------------------------------------------------------------------
 
+	/**
+	 * Mount roots whose real deletion the user already confirmed in
+	 * trashSystem().  When the system trash then fails and Obsidian falls
+	 * back to trashLocal(), the confirmation is consumed instead of asking
+	 * the same question a second time.  Entries expire quickly so a stale
+	 * confirmation can never silently authorise a later, unrelated delete.
+	 */
+	private confirmedRootDeletions: Map<string, number> = new Map();
+	private static readonly ROOT_DELETION_CONFIRM_TTL_MS = 5000;
+
+	private consumeRootDeletionConfirmation(mountId: string): boolean {
+		const confirmedAt = this.confirmedRootDeletions.get(mountId);
+		this.confirmedRootDeletions.delete(mountId);
+		return confirmedAt !== undefined &&
+			Date.now() - confirmedAt <= VirtualAdapter.ROOT_DELETION_CONFIRM_TTL_MS;
+	}
+
 	private async handleRootMountDeletion(rootMount: MountPoint): Promise<boolean> {
 		const action = await this.onMountRootDelete(rootMount);
 		if (action === 'cancel') {
@@ -974,25 +991,74 @@ export class VirtualAdapter {
 			}
 			this.assertAllowed(realPath);
 			if (this.dryRun) { logger.debug(`[FolderBridge DryRun] trashSystem → ${realPath}`); return true; }
-			try {
-				const electron = loadOptionalNodeModule<{ shell?: { trashItem(p: string): Promise<string> } }>('electron');
-				const shell = electron?.shell;
-				await shell?.trashItem(realPath);
-				await this.notifyDelete(normalizedPath);
-				return true;
-			} catch {
-				// Fallback: permanent delete
-				await fs.promises.rm(realPath, { recursive: true, force: true });
-				await this.notifyDelete(normalizedPath);
-				return true;
+			// Never fall back to a permanent delete here.  Per the DataAdapter
+			// contract, returning false tells Obsidian the system trash is
+			// unavailable (network volume, no trash support, no Electron shell)
+			// and it then calls trashLocal(), which keeps the data recoverable.
+			const electron = loadOptionalNodeModule<{ shell?: { trashItem(p: string): Promise<void> } }>('electron');
+			const shell = electron?.shell;
+			if (!shell?.trashItem) {
+				if (rootMount) this.confirmedRootDeletions.set(rootMount.id, Date.now());
+				return false;
 			}
+			try {
+				await shell.trashItem(realPath);
+			} catch (e) {
+				logger.warn(`[FolderBridge] System trash unavailable for "${realPath}"; falling back to the vault .trash folder.`, e);
+				if (rootMount) this.confirmedRootDeletions.set(rootMount.id, Date.now());
+				return false;
+			}
+			await this.notifyDelete(normalizedPath);
+			return true;
 		}
 		return this.orig().trashSystem(normalizedPath);
 	}
 
+	/**
+	 * Move a real file or folder from a local mount into the vault's `.trash`
+	 * folder, mirroring what Obsidian does for in-vault files.  "Move to
+	 * Obsidian trash" must stay recoverable, so this never deletes: if the
+	 * vault location is unknown it throws and the item is left untouched.
+	 */
+	private async moveToVaultTrash(realPath: string): Promise<void> {
+		const basePath = (this.orig() as DataAdapter & { getBasePath?(): string }).getBasePath?.();
+		if (!basePath) {
+			throw new Error('Folder Bridge: cannot locate the vault .trash folder, so the item was not deleted.');
+		}
+		const trashDir = path.join(basePath, '.trash');
+		await fs.promises.mkdir(trashDir, { recursive: true });
+
+		// Pick a free name: "note.md", "note 2.md", "note 3.md", …
+		const parsed = path.parse(realPath);
+		let destination = path.join(trashDir, parsed.base);
+		for (let n = 2; await this.realPathExists(destination); n++) {
+			destination = path.join(trashDir, `${parsed.name} ${n}${parsed.ext}`);
+		}
+
+		try {
+			await fs.promises.rename(realPath, destination);
+		} catch (e) {
+			const err = e as NodeJS.ErrnoException;
+			if (err.code !== 'EXDEV') throw new Error(`Folder Bridge: ${translateFsError(err, 'trash')}`);
+			// Mount and vault are on different volumes: copy first, and only
+			// remove the original once the copy has fully succeeded.
+			await fs.promises.cp(realPath, destination, { recursive: true, errorOnExist: true, force: false });
+			await fs.promises.rm(realPath, { recursive: true });
+		}
+	}
+
+	private async realPathExists(candidate: string): Promise<boolean> {
+		try {
+			await fs.promises.lstat(candidate);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
 	async trashLocal(normalizedPath: string, system?: boolean): Promise<void> {
 		const rootMount = this.pathMapper.getMountByVirtualPath(normalizedPath);
-		if (rootMount) {
+		if (rootMount && !this.consumeRootDeletionConfirmation(rootMount.id)) {
 			const handled = await this.handleRootMountDeletion(rootMount);
 			if (handled) return;
 		}
@@ -1025,7 +1091,7 @@ export class VirtualAdapter {
 			}
 			this.assertAllowed(realPath);
 			if (this.dryRun) { logger.debug(`[FolderBridge DryRun] trashLocal → ${realPath}`); return; }
-			await fs.promises.rm(realPath, { recursive: true, force: true });
+			await this.moveToVaultTrash(realPath);
 			await this.notifyDelete(normalizedPath);
 			return;
 		}
