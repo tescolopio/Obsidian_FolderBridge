@@ -211,6 +211,7 @@ export class MountManagerModal extends Modal {
 	private sftpPassword = '';
 	private sftpPrivateKeyPath = '';
 	private sftpPassphrase = '';
+	private forgetSftpHostKey = false;
 	// Advanced (per-mount watcher + performance)
 	private watcherDebounceMs: number | undefined = undefined;
 	private watcherUsePolling = false;
@@ -688,6 +689,25 @@ export class MountManagerModal extends Modal {
 					.setValue(this.sftpPrivateKeyPath)
 					.onChange(val => { this.sftpPrivateKeyPath = val.trim(); });
 			});
+
+		const pinnedHostKey = this.editMount?.mountType === 'sftp' ? this.editMount.sftpHostKeyFingerprint : undefined;
+		if (pinnedHostKey) {
+			const hostKeySetting = new Setting(sftpSection)
+				.setName('Saved host key')
+				.setDesc(`${pinnedHostKey} — connections are refused if the server presents a different key.`);
+			hostKeySetting.addButton(btn => btn
+				.setButtonText('Forget host key')
+				.setClass('mod-warning')
+				.onClick(() => {
+					this.forgetSftpHostKey = true;
+					btn.setDisabled(true);
+					hostKeySetting.setDesc('The saved host key will be forgotten when you save. The next connection saves the key the server presents.');
+				}));
+		} else {
+			new Setting(sftpSection)
+				.setName('Host key')
+				.setDesc('The server host key is saved on the first successful connection. Later connections are refused if it changes.');
+		}
 
 		new Setting(sftpSection)
 			.setName('Private key passphrase (optional)')
@@ -1173,6 +1193,7 @@ export class MountManagerModal extends Modal {
 					sftpPassword: this.sftpPassword || undefined,
 					sftpPrivateKeyPath: this.sftpPrivateKeyPath || undefined,
 					sftpPassphrase: this.sftpPassphrase || undefined,
+					...(this.forgetSftpHostKey ? { sftpHostKeyFingerprint: undefined } : {}),
 					visibleFileFilter: this.visibleFileFilter !== 'all' ? this.visibleFileFilter : undefined,
 					maxFiles: this.maxFiles,
 				},

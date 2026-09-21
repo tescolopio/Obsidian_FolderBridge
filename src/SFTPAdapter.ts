@@ -58,6 +58,19 @@ interface SFTPConnectOptions {
     password?: string;
     privateKey?: Buffer;
     passphrase?: string;
+    /** ssh2 host key callback: receives the raw host public key; return false to abort. */
+    hostVerifier?: (hostKey: Buffer) => boolean;
+}
+
+/**
+ * Format a raw SSH host public key the way OpenSSH prints it
+ * (`ssh-keygen -lf`): "SHA256:" + unpadded base64 of the SHA-256 digest.
+ */
+export function formatHostKeyFingerprint(hostKey: Buffer): string {
+    const cryptoMod = loadOptionalNodeModule<typeof import('crypto')>('crypto');
+    if (!cryptoMod) throw new Error('crypto is unavailable in this environment');
+    const digest = cryptoMod.createHash('sha256').update(hostKey).digest('base64').replace(/=+$/, '');
+    return `SHA256:${digest}`;
 }
 
 function loadSFTPClient(): new () => SFTPClientInstance {
@@ -88,6 +101,14 @@ export class SFTPAdapter {
     private password?: string;
     private privateKeyPath?: string;
     private passphrase?: string;
+    private hostKeyFingerprint?: string;
+    private mountId?: string;
+
+    /**
+     * Set by the plugin so a host key pinned on first connect can be persisted
+     * on the mount (`sftpHostKeyFingerprint`).  Null when nothing is listening.
+     */
+    static onHostKeyPinned: ((mountId: string, fingerprint: string) => void) | null = null;
 
     // The sftp client instance; recreated on connect
     private sftp: SFTPClientInstance | null = null;
@@ -102,6 +123,10 @@ export class SFTPAdapter {
             password?: string;
             privateKeyPath?: string;
             passphrase?: string;
+            /** Previously pinned host key fingerprint ("SHA256:…"), if any. */
+            hostKeyFingerprint?: string;
+            /** Mount id reported to `onHostKeyPinned` when a new key is pinned. */
+            mountId?: string;
         }
     ) {
         this.host = host;
@@ -110,6 +135,8 @@ export class SFTPAdapter {
         this.password = options.password;
         this.privateKeyPath = options.privateKeyPath;
         this.passphrase = options.passphrase;
+        this.hostKeyFingerprint = options.hostKeyFingerprint;
+        this.mountId = options.mountId;
     }
 
     // ------------------------------------------------------------------
@@ -144,6 +171,8 @@ export class SFTPAdapter {
                 password,
                 privateKeyPath: mount.sftpPrivateKeyPath ?? undefined,
                 passphrase,
+                hostKeyFingerprint: mount.sftpHostKeyFingerprint ?? undefined,
+                mountId: mount.id,
             }
         );
     }
@@ -184,8 +213,41 @@ export class SFTPAdapter {
             connectOptions.password = this.password;
         }
 
-        await client.connect(connectOptions);
+        // Host key verification (trust on first use).  Without a hostVerifier
+        // ssh2 accepts ANY host key, so a machine in the network path could
+        // impersonate the server, capture the password and read or alter notes.
+        const pinned = this.hostKeyFingerprint;
+        let presented: string | undefined;
+        connectOptions.hostVerifier = (hostKey: Buffer): boolean => {
+            presented = formatHostKeyFingerprint(hostKey);
+            return !pinned || presented === pinned;
+        };
+
+        try {
+            await client.connect(connectOptions);
+        } catch (e) {
+            if (pinned && presented && presented !== pinned) {
+                throw new Error(
+                    `SFTP host key for ${this.host}:${this.port} has changed. ` +
+                    `Expected ${pinned} but the server presented ${presented}. ` +
+                    'Connection refused. If the server was legitimately re-keyed, ' +
+                    'edit the mount and forget the saved host key.'
+                );
+            }
+            throw e;
+        }
+
+        // First successful connection: pin the key and let the plugin persist it.
+        if (!pinned && presented) {
+            this.hostKeyFingerprint = presented;
+            if (this.mountId) SFTPAdapter.onHostKeyPinned?.(this.mountId, presented);
+        }
         this.sftp = client;
+    }
+
+    /** The pinned host key fingerprint, if one is known. */
+    getHostKeyFingerprint(): string | undefined {
+        return this.hostKeyFingerprint;
     }
 
     private isSFTPReady(): boolean {
