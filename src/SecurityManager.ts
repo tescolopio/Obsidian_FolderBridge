@@ -7,6 +7,9 @@ const path: typeof import('path') = loadOptionalNodeModule<typeof import('path')
 /** Mount types whose realPath is a remote address, not a local filesystem path. */
 const CLOUD_MOUNT_TYPES: Set<MountType> = new Set(['webdav', 's3', 'sftp']);
 
+/** Folder names that hold credentials; a path containing one of these segments is never mountable. */
+const CREDENTIAL_FOLDERS: ReadonlySet<string> = new Set(['.ssh', '.gnupg']);
+
 /**
  * SecurityManager enforces an explicit allowlist of real filesystem paths.
  * Every I/O operation on a mounted path is checked against this list before
@@ -69,6 +72,8 @@ export class SecurityManager {
 			'C:\\Program Files', 'C:/Program Files',
 			'C:\\Program Files (x86)', 'C:/Program Files (x86)',
 			'/', '/etc', '/usr', '/bin', '/sbin', '/boot', '/dev', '/proc', '/sys', '/var',
+			// macOS keeps the real /etc and /var under /private; also system libraries.
+			'/private/etc', '/private/var', '/System', '/lib', '/lib32', '/lib64', '/libx32',
 		];
 		for (const dangerousPath of dangerous) {
 			const dangerousNorm = normalizeForComparison(dangerousPath);
@@ -80,6 +85,16 @@ export class SecurityManager {
 			) {
 				return `"${trimmedPath}" is a protected system path and cannot be ${usageLabel}.`;
 			}
+		}
+
+		// Windows can be installed on any drive letter, not only C:.
+		if (comparisonPaths.some(norm => /^[a-z]:\/(windows|program files( \(x86\))?)(\/|$)/.test(norm))) {
+			return `"${trimmedPath}" is a protected system path and cannot be ${usageLabel}.`;
+		}
+
+		// Credential folders are never a sensible mount, wherever they live.
+		if (comparisonPaths.some(norm => norm.split('/').some(segment => CREDENTIAL_FOLDERS.has(segment)))) {
+			return `"${trimmedPath}" is a protected path (it can hold credentials) and cannot be ${usageLabel}.`;
 		}
 
 		return null;
