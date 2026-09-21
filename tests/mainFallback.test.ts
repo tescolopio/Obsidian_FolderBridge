@@ -1019,3 +1019,40 @@ describe('main fallback regressions', () => {
         expect(plugin.pathMapper.getEffectiveRealPath(plugin.settings.mountPoints[0])).toBe('/latest-root');
     });
 });
+
+describe('unsafe device overrides', () => {
+    const persistedOverrides = (plugin: FolderBridgePlugin) =>
+        (plugin as unknown as { persistedMountPoints: MountPoint[] }).persistedMountPoints[0].deviceOverrides;
+
+    it('does not resolve or allowlist a protected override for this device', async () => {
+        const { plugin } = await makePlugin([{ ...mount('docs', '/primary'), deviceOverrides: { desktop: '/etc' } }]);
+        const mapped = plugin.pathMapper.getMountByVirtualPath('docs')!;
+
+        expect(plugin.pathMapper.getEffectiveRealPath(mapped)).toBe('/primary');
+        expect(plugin.pathMapper.toRealPath('docs/note.md', mapped)).not.toContain('etc');
+        expect(plugin.settings.allowlist).not.toContain('/etc');
+        expect(plugin.settings.allowlist).toContain('/primary');
+    });
+
+    it('keeps the stored override so nothing is destroyed on disk', async () => {
+        const { plugin } = await makePlugin([{ ...mount('docs', '/primary'), deviceOverrides: { desktop: '/etc' } }]);
+        expect(persistedOverrides(plugin)).toEqual({ desktop: '/etc' });
+    });
+
+    it('still honors a safe override for this device', async () => {
+        const { plugin } = await makePlugin([{ ...mount('docs', '/primary'), deviceOverrides: { desktop: '/override' } }]);
+        const mapped = plugin.pathMapper.getMountByVirtualPath('docs')!;
+
+        expect(plugin.pathMapper.getEffectiveRealPath(mapped)).toBe('/override');
+        expect(plugin.settings.allowlist).toContain('/override');
+    });
+
+    it('only checks this device: another device\'s entry does not affect it', async () => {
+        const { plugin } = await makePlugin([{
+            ...mount('docs', '/primary'), deviceOverrides: { laptop: '/etc', desktop: '/override' },
+        }]);
+        const mapped = plugin.pathMapper.getMountByVirtualPath('docs')!;
+
+        expect(plugin.pathMapper.getEffectiveRealPath(mapped)).toBe('/override');
+    });
+});

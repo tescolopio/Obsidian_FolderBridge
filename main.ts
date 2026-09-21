@@ -435,12 +435,39 @@ export default class FolderBridgePlugin extends Plugin {
 		return mount.mountType === 'webdav' || mount.mountType === 's3' || mount.mountType === 'sftp';
 	}
 
+	/** Mount ids whose unsafe device override was already reported this session. */
+	private reportedUnsafeOverrides = new Set<string>();
+
+	/**
+	 * Returns the mount without this device's override when that override points
+	 * at a protected path.  Mounts loaded from data.json or a shared TOC file
+	 * never pass through validateMount(), so without this PathMapper would still
+	 * resolve reads, listings and metadata to the protected folder even though
+	 * it is refused an allowlist entry.  Only the effective view is changed; the
+	 * stored mount keeps its override.
+	 */
+	private withSafeDeviceOverride(mount: MountPoint): MountPoint {
+		const deviceId = this.settings.deviceId;
+		const override = mount.deviceOverrides?.[deviceId];
+		if (!override) return mount;
+		const validator = this.security ?? new SecurityManager([]);
+		const error = validator.validateDeviceOverrides({ [deviceId]: override });
+		if (!error) return mount;
+		if (!this.reportedUnsafeOverrides.has(mount.id)) {
+			this.reportedUnsafeOverrides.add(mount.id);
+			logger.warn(`[FolderBridge] Ignoring device override for mount "${mount.virtualPath}": ${error}`);
+			new Notice(`Folder Bridge: Ignored an unsafe device path for "${mount.virtualPath}" and used the mount's normal path instead.`, 8000);
+		}
+		const remaining = Object.fromEntries(Object.entries(mount.deviceOverrides ?? {}).filter(([id]) => id !== deviceId));
+		return { ...mount, deviceOverrides: remaining };
+	}
+
 	private syncEffectiveMountState(): void {
 		const effectiveMounts = [
 			...this.persistedMountPoints,
 			...this.managedTocMountPoints,
 			...this.externalTocMountPoints,
-		];
+		].map(mount => this.withSafeDeviceOverride(mount));
 		const effectiveAllowlist = Array.from(new Set([
 			...this.persistedAllowlist,
 			...effectiveMounts
