@@ -539,7 +539,7 @@ export class S3Adapter {
         } else {
             const cmd = new aws.CopyObjectCommand({
                 Bucket: this.bucket,
-                CopySource: `${this.bucket}/${srcKey}`,
+                CopySource: this.copySource(srcKey),
                 Key: dstKey,
             });
             await this.client.send(cmd);
@@ -567,7 +567,7 @@ export class S3Adapter {
                 const dstKey = normalizedDst + srcKey.slice(normalizedSrc.length);
                 await this.client.send(new aws.CopyObjectCommand({
                     Bucket: this.bucket,
-                    CopySource: `${this.bucket}/${srcKey}`,
+                    CopySource: this.copySource(srcKey),
                     Key: dstKey,
                 }));
             }
@@ -579,6 +579,15 @@ export class S3Adapter {
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    /**
+     * CopyObject's `CopySource` must be URL-encoded (bucket/key, separated by a
+     * slash).  Encode each key segment so spaces, `+`, `?`, `#` and non-ASCII
+     * characters survive, while keeping the `/` separators literal.
+     */
+    private copySource(key: string): string {
+        return `${this.bucket}/${key.split('/').map(encodeURIComponent).join('/')}`;
+    }
 
     private isNotFound(err: unknown): boolean {
         if (typeof err !== 'object' || err === null) return false;
