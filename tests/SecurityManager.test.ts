@@ -338,3 +338,69 @@ describe('SecurityManager deviceOverrides validation', () => {
 		expect(sec.validateDeviceOverrides(undefined)).toBeNull();
 	});
 });
+
+describe('SecurityManager extended protected paths', () => {
+	const sec = new SecurityManager([]);
+
+	describe.each(['linux', 'darwin', 'win32'] as const)('on %s', platform => {
+		it.each([
+			'/private/etc',
+			'/private/etc/ssh',
+			'/private/var/db',
+			'/System/Library',
+			'/lib/modules',
+			'/lib64/ld.so',
+			'/home/user/.ssh',
+			'/Users/me/.gnupg/private-keys',
+			'/home/user/Notes/.ssh/keys',
+			'C:\\Users\\me\\.ssh',
+			'D:\\Windows\\System32',
+			'e:/program files/App',
+			'D:\\Program Files (x86)\\App',
+		])('blocks %s', candidate => {
+			withPlatform(platform, () => {
+				expect(sec.validateMount(mkMount('Protected', candidate), [])).toMatch(/protected/i);
+			});
+		});
+
+		it.each([
+			'/home/user/Notes',
+			'/private/tmp/notes',
+			'/private/etc-backup/Notes',
+			'/System-old/Notes',
+			'/lib-notes/Notes',
+			'/library/Notes',
+			'/home/user/ssh-notes',
+			'/home/user/.ssh-backup/Notes',
+			'/home/user/.gnupg2/Notes',
+			'D:\\Windows-old\\Notes',
+			'D:\\Notes',
+		])('preserves safe path %s', candidate => {
+			withPlatform(platform, () => {
+				expect(sec.validateMount(mkMount('Notes', candidate), [])).toBeNull();
+			});
+		});
+
+		it.each(['/private', '/private/', '//private'])('blocks %s because it contains /private/etc', candidate => {
+			withPlatform(platform, () => {
+				expect(sec.validateMount(mkMount('Protected', candidate), [])).toMatch(/protected/i);
+			});
+		});
+
+		it('documents a known limit: a whole non-C drive root can still be mounted', () => {
+			// Deliberate trade-off (whole external-drive mounts keep working). It would
+			// expose D:\\Windows if Windows is installed on D:. Revisit if that changes.
+			withPlatform(platform, () => {
+				expect(sec.validateMount(mkMount('Drive', 'D:\\'), [])).toBeNull();
+				expect(sec.validateMount(mkMount('Drive', 'E:/'), [])).toBeNull();
+			});
+		});
+
+		it('applies the same rules to device overrides', () => {
+			withPlatform(platform, () => {
+				expect(sec.validateDeviceOverrides({ dev: '/private/etc' })).toMatch(/protected/i);
+				expect(sec.validateDeviceOverrides({ dev: '/home/user/.ssh' })).toMatch(/protected/i);
+			});
+		});
+	});
+});
