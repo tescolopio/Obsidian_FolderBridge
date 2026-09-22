@@ -10,6 +10,9 @@ const CLOUD_MOUNT_TYPES: Set<MountType> = new Set(['webdav', 's3', 'sftp']);
 /** Folder names that hold credentials; a path containing one of these segments is never mountable. */
 const CREDENTIAL_FOLDERS: ReadonlySet<string> = new Set(['.ssh', '.gnupg']);
 
+/** Exact folders that contain a protected one (macOS keeps the real /etc and /var under /private). */
+const PROTECTED_PARENTS: ReadonlySet<string> = new Set(['/private']);
+
 /**
  * SecurityManager enforces an explicit allowlist of real filesystem paths.
  * Every I/O operation on a mounted path is checked against this list before
@@ -87,7 +90,17 @@ export class SecurityManager {
 			}
 		}
 
+		// A folder that CONTAINS a protected one would expose it through the
+		// allowlist's descendant rule.  Only the exact folder is refused, so
+		// ordinary paths beneath it (for example /private/tmp/notes) still work.
+		if (comparisonPaths.some(norm => PROTECTED_PARENTS.has(norm))) {
+			return `"${trimmedPath}" is a protected system path and cannot be ${usageLabel}.`;
+		}
+
 		// Windows can be installed on any drive letter, not only C:.
+		// Known limit: a whole drive root other than C:\ (for example D:\) can still be
+		// mounted, so it would expose D:\Windows if Windows is installed there.  That is
+		// a deliberate trade-off that keeps whole external-drive mounts working.
 		if (comparisonPaths.some(norm => /^[a-z]:\/(windows|program files( \(x86\))?)(\/|$)/.test(norm))) {
 			return `"${trimmedPath}" is a protected system path and cannot be ${usageLabel}.`;
 		}

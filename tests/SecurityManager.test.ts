@@ -381,6 +381,21 @@ describe('SecurityManager extended protected paths', () => {
 			});
 		});
 
+		it.each(['/private', '/private/', '//private'])('blocks %s because it contains /private/etc', candidate => {
+			withPlatform(platform, () => {
+				expect(sec.validateMount(mkMount('Protected', candidate), [])).toMatch(/protected/i);
+			});
+		});
+
+		it('documents a known limit: a whole non-C drive root can still be mounted', () => {
+			// Deliberate trade-off (whole external-drive mounts keep working). It would
+			// expose D:\\Windows if Windows is installed on D:. Revisit if that changes.
+			withPlatform(platform, () => {
+				expect(sec.validateMount(mkMount('Drive', 'D:\\'), [])).toBeNull();
+				expect(sec.validateMount(mkMount('Drive', 'E:/'), [])).toBeNull();
+			});
+		});
+
 		it('applies the same rules to device overrides', () => {
 			withPlatform(platform, () => {
 				expect(sec.validateDeviceOverrides({ dev: '/private/etc' })).toMatch(/protected/i);
