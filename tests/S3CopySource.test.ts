@@ -44,6 +44,25 @@ describe('S3Adapter CopySource encoding', () => {
 		expect(copySources(send)).toEqual(['bucket/plain/a.md']);
 	});
 
+	it('encodes every object copied when a folder is copied', async () => {
+		const { s3, send } = makeAdapter();
+		// A key with no object of its own but children under it is a folder.
+		send.mockImplementation(async (cmd: Sent) => {
+			if (cmd.constructor.name === 'HeadObjectCommand') {
+				throw Object.assign(new Error('Not Found'), { name: 'NotFound', $metadata: { httpStatusCode: 404 } });
+			}
+			if (cmd.constructor.name === 'ListObjectsV2Command') {
+				return { Contents: [{ Key: 'dir/my file+1.md' }, { Key: 'dir/sub/na\u00efve?.md' }], IsTruncated: false };
+			}
+			return {};
+		});
+		await s3.copy('/dir', '/dir2');
+		expect(copySources(send)).toEqual([
+			'bucket/dir/my%20file%2B1.md',
+			'bucket/dir/sub/na%C3%AFve%3F.md',
+		]);
+	});
+
 	it('rename copies with an encoded source before removing the original', async () => {
 		const { s3, send } = makeAdapter();
 		await s3.rename('/notes/my file.md', '/notes/renamed.md');
