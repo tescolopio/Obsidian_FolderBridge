@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Preserve raw device overrides during ordinary mount edits and moves, including sanitized runtime mounts and managed TOC mounts. Override replacement or clearing now requires an explicit update option.
+- Omit the unsupported trash action for remote mount roots, preventing a failed remote-trash attempt from saving "Don't ask again" for future permanent deletions. Unmount and explicit permanent deletion remain available.
+
 ## [2.15.5-rc.2] - 2026-10-03
 
 This opt-in prerelease adds source-file safety and path-hardening changes on top

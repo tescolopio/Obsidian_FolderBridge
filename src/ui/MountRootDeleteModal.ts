@@ -6,7 +6,7 @@ export class MountRootDeleteModal extends Modal {
     private dontAskAgain = false;
     private resolved = false;
 
-    constructor(app: App, private mountPath: string, resolve: (value: 'unmount' | 'delete' | 'unmount-always' | 'delete-always' | 'cancel') => void | Promise<void>, private trash = false) {
+    constructor(app: App, private mountPath: string, resolve: (value: 'unmount' | 'delete' | 'unmount-always' | 'delete-always' | 'cancel') => void | Promise<void>, private trash = false, private canTrash = true) {
         super(app);
         this.resolve = resolve;
     }
@@ -28,7 +28,9 @@ export class MountRootDeleteModal extends Modal {
 
         contentEl.createEl('p', {
             text: this.trash
-                ? 'Do you want to move the real folder to trash, or just unmount it from Obsidian? Remote mounts do not support recoverable trash.'
+                ? (this.canTrash
+                    ? 'Do you want to move the real folder to trash, or just unmount it from Obsidian?'
+                    : 'Recoverable trash is unavailable for this remote mount. You can unmount it without deleting any remote data.')
                 : 'Do you want to permanently delete the real folder on disk, or just unmount it from Obsidian?'
         });
 
@@ -61,17 +63,19 @@ export class MountRootDeleteModal extends Modal {
             }
         };
 
-        const btnDelete = buttonContainer.createEl('button', {
-            text: this.trash ? 'Move real folder to trash' : 'Delete real folder',
-            cls: 'mod-warning',
-        });
-        btnDelete.onclick = () => {
-            if (!this.resolved) {
-                this.resolved = true;
-                this.settle(this.dontAskAgain ? 'delete-always' : 'delete');
-                this.close();
-            }
-        };
+        if (!this.trash || this.canTrash) {
+            const btnDelete = buttonContainer.createEl('button', {
+                text: this.trash ? 'Move real folder to trash' : 'Delete real folder',
+                cls: 'mod-warning',
+            });
+            btnDelete.onclick = () => {
+                if (!this.resolved) {
+                    this.resolved = true;
+                    this.settle(this.dontAskAgain ? 'delete-always' : 'delete');
+                    this.close();
+                }
+            };
+        }
     }
 
     onClose() {
