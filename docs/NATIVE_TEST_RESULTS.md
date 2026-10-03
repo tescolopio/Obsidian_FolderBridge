@@ -67,7 +67,7 @@ Notes on specific rows:
   events. Only later external changes are muted.
 - **Rows 2 and 7** already have reporter passes on the 2.15.3-rc.2 build, listed
   in the checklist. Those do not fill these rows for 2.15.4.
-- **Rows 14-16** require the unreleased stabilization candidate described in
+- **Rows 14-16** require 2.15.5-rc.2 or later as described in
   [the next release outline](NEXT_RELEASE.md), not 2.15.5-rc.1. Recover local
   items from `.trash/folderbridge-<unique>/<original-name>` by copying them back
   to their original source location. Pause external writers for cross-volume

@@ -27,7 +27,7 @@ behavior change when deciding versioning and upgrade communication.
 ## Integrated On This Branch
 
 Branch: `stabilization/next-release-safety`, based on GitHub main at `61aeffd`.
-The safety changes are being committed for the approved rc.2 preparation PR.
+The safety changes were committed as `f3a2cbf` for the approved rc.2 preparation PR.
 The original integration and feedback passes did not merge upstream PRs.
 
 | Item | Source | Included behavior |
@@ -44,8 +44,8 @@ The original integration and feedback passes did not merge upstream PRs.
 
 ## Upgrade And Recovery Notes
 
-- Stable remains 2.15.4; the downloadable 2.15.5-rc.1 does not include the later
-  append, traversal, override or trash work.
+- Stable remains 2.15.4; opt-in 2.15.5-rc.2 adds the later append, traversal,
+  override and trash work absent from 2.15.5-rc.1.
 - Back up the vault, plugin settings and mounted sources before any candidate
   test. Use copied source data, never valuable files for failure injection.
 - Local and vault-mounted trash entries are now located at
@@ -115,12 +115,11 @@ active vault. Obsidian and remote behavior are mocked unless stated otherwise.
 
 - Lint passes with one pre-existing sentence-case warning.
 - UI text checks, TypeScript checking and production bundling pass.
-- Last full run after #70 feedback: 536 passed, 4 failed, 540 total across 17 test files.
+- Final rc.2 full run on October 3: 542 passed, 4 failed, 546 total across 17 test files.
   Focused changed-behavior runs: 238 passed across the trash, protected-path
   and deletion-dialog files, plus 12 device-override tests passed.
-- Subsequent #69 parent-gap coverage: all 202 SecurityManager tests and
-  TypeScript checking pass, including 6 added normalized-parent cases. The full
-  gate was not rerun for that test/documentation-only follow-up.
+- All 202 SecurityManager tests pass, including 6 normalized-parent cases added
+  after #69 feedback. The final full run includes that follow-up.
 - Changed-behavior checks pass: local/vault trash, collisions, cross-volume
   success/partial-copy/source-removal failures, missing/failed system trash,
   remote refusal and permanent deletion, read-only/dry-run/filter/allowlist
@@ -160,7 +159,8 @@ Use [release validation](RELEASE_VALIDATION.md) and record runs in
    in-app discovery/install. GitHub release availability is not directory
    approval; if still blocked, state BRAT/manual installation limits explicitly.
 8. Review matching version/tag metadata, release notes and all three packaged
-   assets before a separate publishing approval.
+   assets for the approved rc.2 publication. Stable publication still requires
+   a separate approval after the outstanding gates are completed.
 
 ## Deferred From This Release
 

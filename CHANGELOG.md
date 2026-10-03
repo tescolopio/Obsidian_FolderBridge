@@ -7,9 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-These changes are being prepared on the stabilization branch. They are not in
-stable 2.15.4 or the published 2.15.5-rc.1 assets. See the
-[next release outline](docs/NEXT_RELEASE.md) for scope and outstanding gates.
+## [2.15.5-rc.2] - 2026-10-03
+
+This opt-in prerelease adds source-file safety and path-hardening changes on top
+of 2.15.5-rc.1. Stable 2.15.4 remains the latest stable release. Back up settings,
+the vault and mounted sources; test only in disposable vaults with copied files.
+The maintainer approved this candidate with the limitations below disclosed,
+not as stable promotion. See the [release outline](docs/NEXT_RELEASE.md).
 
 ### Fixed
 - Reject traversal segments in file-server requests (#55).
@@ -23,6 +27,17 @@ stable 2.15.4 or the published 2.15.5-rc.1 assets. See the
 ### Changed
 - WebDAV, S3 and SFTP trash requests now fail explicitly without deleting remote data. Explicit permanent-delete operations remain available. Remote download-to-trash recovery is not implemented.
 - Make lint and UI-copy validation paths portable on Windows. Production builds can set `FOLDERBRIDGE_BUILD_OUTFILE` to validate without overwriting an installed plugin.
+
+### Validation And Known Limitations
+- Local Windows lint, UI text checks, TypeScript checking and production bundling pass. The final full run reports 542 passed and 4 failed out of 546 tests across 17 files. All four Windows path-expectation failures also reproduce on unchanged main. The merged candidate must pass the complete Ubuntu/Node 20 CI gate before tagging; automated checks mock Obsidian and do not establish native compatibility.
+- Native Obsidian trash fallback, restore, external-edit/save, Windows/WSL, macOS, Android and current/oldest host checks remain pending. Cross-volume unit tests inject `EXDEV`; no physical cross-volume test was performed. Pause external writers during copy-then-remove operations.
+- Local recovery entries are `.trash/folderbridge-<unique>/<original-name>` in the current vault. Restore by copying back to the original source. Failed copies preserve the source and can retain partial recovery data; failed source removal retains the completed recovery copy and reports the recovery location.
+- WebDAV/S3/SFTP recoverable trash is intentionally unavailable. Explicit permanent deletion is unchanged and still has backend-specific limitations, including non-recursive S3 folder removal.
+- Whole-drive mounts remain supported. A non-C root such as `D:\` can still expose protected descendants; that review comment remains unresolved pending a descendant-access policy. Primary/fallback paths loaded from existing settings, manual allowlists, symlink containment and unguarded metadata/path methods also need further review. This is not complete security hardening.
+- SFTP host-key verification (#60), S3 non-root-prefix correction (#57), S3 copy/rename encoding (#68) and the security policy (#71) are not included.
+- Current dependency audit reports 2 high production affected-package entries (`braces`/`chokidar`, the same advisory chain) and 3 moderate development affected-package entries via `moment`/Obsidian tooling. They remain unresolved; this release does not claim a clean dependency audit.
+- Inherited Android loading and suppressed-startup fixes remain unconfirmed on native devices. WebDAV is unavailable on Android in this candidate; S3/B2 mobile access is untested. Suppressed startup emits one burst of create events, so test with attachment-management plugins.
+- Install `main.js`, `manifest.json` and `styles.css` from this candidate together. Keep #16, #18, #61, #62 and #63 open pending the remaining work and results. BRAT/manual availability is not community-directory approval.
 
 ## [2.15.5-rc.1] - 2026-09-20
 
