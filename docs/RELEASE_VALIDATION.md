@@ -1,5 +1,14 @@
 # Compatibility Release Validation
 
+## Safety Candidate: 2.15.5-rc.2
+
+The October 2-3 stabilization work is tracked in the
+[next release outline](NEXT_RELEASE.md). The maintainer approved an opt-in rc.2
+after its PR and merged-main CI pass; stable promotion remains unapproved. Use its exact
+revision, rather than older stable or prerelease assets, for the new trash and
+device-override checks in [the results sheet](NATIVE_TEST_RESULTS.md).
+The historical evidence below remains scoped to the builds named there.
+
 ## Current Release And Evidence
 
 As of 2026-09-20, the latest stable release is

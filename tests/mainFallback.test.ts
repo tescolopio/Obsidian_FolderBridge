@@ -1019,3 +1019,142 @@ describe('main fallback regressions', () => {
         expect(plugin.pathMapper.getEffectiveRealPath(plugin.settings.mountPoints[0])).toBe('/latest-root');
     });
 });
+
+describe('unsafe device overrides', () => {
+    beforeEach(() => {
+        vi.mocked(Notice).mockClear();
+        vi.mocked(checkPathAccessible).mockImplementation(() => Promise.resolve({ accessible: true, readOnly: false }));
+        vi.spyOn(fs, 'readFile').mockResolvedValue(serializeTocConfig([]));
+        vi.spyOn(fs, 'writeFile').mockResolvedValue(undefined);
+        vi.spyOn(fs, 'mkdir').mockResolvedValue(undefined);
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    const persistedOverrides = (plugin: FolderBridgePlugin) =>
+        (plugin as unknown as { persistedMountPoints: MountPoint[] }).persistedMountPoints[0].deviceOverrides;
+
+    it('does not resolve or allowlist a protected override for this device', async () => {
+        const { plugin } = await makePlugin([{ ...mount('docs', '/primary'), deviceOverrides: { desktop: '/etc' } }]);
+        const mapped = plugin.pathMapper.getMountByVirtualPath('docs')!;
+
+        expect(plugin.pathMapper.getEffectiveRealPath(mapped)).toBe('/primary');
+        expect(plugin.pathMapper.toRealPath('docs/note.md', mapped)).not.toContain('etc');
+        expect(plugin.settings.allowlist).not.toContain('/etc');
+        expect(plugin.settings.allowlist).toContain('/primary');
+    });
+
+    it('keeps the stored override so nothing is destroyed on disk', async () => {
+        const { plugin } = await makePlugin([{ ...mount('docs', '/primary'), deviceOverrides: { desktop: '/etc' } }]);
+        expect(persistedOverrides(plugin)).toEqual({ desktop: '/etc' });
+    });
+
+    it('still honors a safe override for this device', async () => {
+        const { plugin } = await makePlugin([{ ...mount('docs', '/primary'), deviceOverrides: { desktop: '/override' } }]);
+        const mapped = plugin.pathMapper.getMountByVirtualPath('docs')!;
+
+        expect(plugin.pathMapper.getEffectiveRealPath(mapped)).toBe('/override');
+        expect(plugin.settings.allowlist).toContain('/override');
+    });
+
+    it('only checks this device: another device\'s entry does not affect it', async () => {
+        const { plugin } = await makePlugin([{
+            ...mount('docs', '/primary'), deviceOverrides: { laptop: '/etc', desktop: '/override' },
+        }]);
+        const mapped = plugin.pathMapper.getMountByVirtualPath('docs')!;
+
+        expect(plugin.pathMapper.getEffectiveRealPath(mapped)).toBe('/override');
+    });
+
+    it.each(['webdav', 's3', 'sftp'] as const)('preserves a server-relative %s override without local-path warnings', async mountType => {
+        const existing = { ...mount('docs', '/notes'), mountType, deviceOverrides: { desktop: '/etc' } };
+        const { plugin, saveData } = await makePlugin([existing]);
+        const mapped = plugin.pathMapper.getMountByVirtualPath('docs')!;
+
+        expect(plugin.pathMapper.getEffectiveRealPath(mapped)).toBe('/etc');
+        expect(mapped.deviceOverrides).toEqual({ desktop: '/etc' });
+        expect(plugin.settings.allowlist).not.toContain('/etc');
+        expect(vi.mocked(Notice).mock.calls.some(([message]) => String(message).includes('unsafe device path'))).toBe(false);
+        expect(saveData).toHaveBeenLastCalledWith(expect.objectContaining({
+            mountPoints: [expect.objectContaining({ deviceOverrides: { desktop: '/etc' } })],
+        }));
+    });
+
+    it('persists enabled and ignore-list edits from a sanitized data.json mount without losing stored overrides', async () => {
+        const overrides = { desktop: '/etc', laptop: '/other-notes' };
+        const { plugin, saveData } = await makePlugin([{ ...mount('docs'), deviceOverrides: overrides }]);
+        const effective = plugin.settings.mountPoints[0];
+        effective.enabled = false;
+        effective.ignoreList = ['attachments', 'cache'];
+
+        expect(await plugin.persistEditableMountFromState(effective)).toBe(true);
+
+        expect(saveData).toHaveBeenLastCalledWith(expect.objectContaining({
+            mountPoints: [expect.objectContaining({
+                enabled: false, ignoreList: ['attachments', 'cache'], deviceOverrides: overrides,
+            })],
+        }));
+        expect(plugin.settings.mountPoints[0]).toMatchObject({ enabled: false, ignoreList: ['attachments', 'cache'] });
+        expect(plugin.pathMapper.getEffectiveRealPath(plugin.settings.mountPoints[0])).toBe('/primary');
+        expect(persistedOverrides(plugin)).toEqual(overrides);
+    });
+
+    it('writes edits from a sanitized managed-TOC mount while retaining the raw override map', async () => {
+        const overrides = { desktop: '/etc', laptop: '/other-notes' };
+        let document = serializeTocConfig([{ ...mount('docs'), deviceOverrides: overrides }]);
+        vi.mocked(fs.readFile).mockImplementation(() => Promise.resolve(document));
+        vi.mocked(fs.writeFile).mockImplementation((_source, text) => {
+            document = String(text);
+            return Promise.resolve();
+        });
+        const { plugin } = await makePlugin([], '/managed.json');
+        const effective = plugin.settings.mountPoints[0];
+        effective.enabled = false;
+        effective.ignoreList = ['attachments'];
+
+        expect(await plugin.persistEditableMountFromState(effective)).toBe(true);
+
+        expect(JSON.parse(document).mounts).toEqual([expect.objectContaining({
+            enabled: false, ignoreList: ['attachments'], deviceOverrides: overrides,
+        })]);
+        expect(plugin.settings.mountPoints[0]).toMatchObject({ enabled: false, ignoreList: ['attachments'] });
+        expect(plugin.pathMapper.getEffectiveRealPath(plugin.settings.mountPoints[0])).toBe('/primary');
+        await plugin.unbindManagedTocSource();
+        expect(persistedOverrides(plugin)).toEqual(overrides);
+    });
+
+    it.each(['reinject', 'restart watcher'] as const)('uses the safe runtime mount when an edit must %s', async lifecycle => {
+        const existing = { ...mount('docs'), deviceOverrides: { desktop: '/etc' } };
+        const { plugin } = await makePlugin([existing]);
+        const startWatching = vi.fn((active: MountPoint) => {
+            expect(plugin.pathMapper.getEffectiveRealPath(active)).toBe('/primary');
+            expect(active).toBe(plugin.settings.mountPoints[0]);
+        });
+        plugin.fileWatcher = { stopWatching: vi.fn(), startWatching } as unknown as FileWatcher;
+        const newData = lifecycle === 'reinject'
+            ? { ...existing, virtualPath: 'renamed' }
+            : { ...existing, watcherDebounceMs: 250 };
+
+        await plugin.updateMount(existing.id, newData);
+
+        expect(startWatching).toHaveBeenCalledOnce();
+        expect(persistedOverrides(plugin)).toEqual({ desktop: '/etc' });
+    });
+
+    it('sanitizes a raw mount passed directly to the injection boundary', async () => {
+        const existing = { ...mount('docs'), deviceOverrides: { desktop: '/etc' } };
+        const { plugin } = await makePlugin([existing]);
+        const starts: string[] = [];
+        plugin.fileWatcher = {
+            stopWatching: vi.fn(),
+            startWatching: (active: MountPoint) => starts.push(plugin.pathMapper.getEffectiveRealPath(active)),
+        } as unknown as FileWatcher;
+
+        await plugin.notifyVaultMountAdded(existing);
+
+        expect(starts).toEqual(['/primary']);
+        expect(existing.deviceOverrides).toEqual({ desktop: '/etc' });
+    });
+});
