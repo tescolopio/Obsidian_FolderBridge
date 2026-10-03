@@ -3,7 +3,9 @@
 Status: stabilization outline, started 2026-10-02. Opt-in 2.15.5-rc.2 was
 published on October 3 through #73. The maintainer then approved the review
 follow-up #74 and separate opt-in 2.15.5-rc.3 preparation and publication after
-CI passes. Stable promotion is not approved.
+CI passes. The maintainer subsequently approved a separate opt-in
+2.15.5-rc.4 SFTP test release and a testing/review request to the contributor.
+Stable promotion is not approved.
 
 ## Goal And Release Sequence
 
@@ -13,21 +15,22 @@ existing write, delete and native-host gates remain incomplete.
 
 1. Finish and review the stabilization branch.
 2. Run the combined automated gate and disclose the remaining blockers below.
-3. Prepare opt-in 2.15.5-rc.3 with matching bundle, manifest and styles after CI
+3. Prepare opt-in 2.15.5-rc.4 with matching bundle, manifest and styles after CI
    passes. Outstanding native, dependency and policy gates remain mandatory for
    stable promotion; their disclosure is not evidence that they are resolved.
 4. Collect native results on disposable sources and address failures.
 5. Choose the stable version and publish only after a separate approval.
 
-The approved candidate continues the 2.15.5 prerelease sequence; the next
+The approved rc.4 candidate continues the 2.15.5 prerelease sequence; the next
 substantial stable release's version is undecided. In particular, "major release"
 does not yet authorize a SemVer 3.0 bump. Review the deliberate remote-trash
 behavior change when deciding versioning and upgrade communication.
 
 ## Integrated On This Branch
 
-Release branch: `release/2.15.5-rc.3`, based on validated main at `152c490`
-(merged #74). The original `stabilization/next-release-safety` work at `f3a2cbf`
+Candidate branch: `stabilization/sftp-host-trust`, based on validated rc.3 main
+at `1d1d7bf` (merged #75), with SFTP work committed as `b5c573e`.
+The original `stabilization/next-release-safety` work at `f3a2cbf`
 shipped through #73; the two review follow-ups at `ed5bfac` shipped through #74.
 The original #59/#69/#70 PRs were integrated without merging their individual PRs.
 
@@ -43,11 +46,12 @@ The original #59/#69/#70 PRs were integrated without merging their individual PR
 | Accurate deletion UX | This branch | Root confirmation distinguishes recoverable trash from permanent deletion. Existing saved root-deletion choices retain their identifiers and follow the requested deletion mode. |
 | Safe local validation | This branch | Windows-portable lint/UI paths and optional redirected bundle output. Installed `main.js` is not replaced by the validation run. |
 | Post-#73 review fixes | Merged #74 | Ordinary edits/moves preserve raw overrides; replacement is explicit. Remote root-trash dialogs offer only cancel/unmount, not a deletion choice that could save a future permanent-delete preference. |
+| SFTP host-key trust | rc.4 candidate; #60 / #63 | Explicit persisted fingerprint approval before authentication, endpoint-bound trust/reset and fail-closed reconnect verification. Credential-free discovery closes before approval; fresh authentication remains bounded and cannot prompt again. |
 
 ## Upgrade And Recovery Notes
 
-- Stable remains 2.15.4; opt-in 2.15.5-rc.3 adds the #73 review fixes on top of
-  rc.2's append, traversal, override and trash work.
+- Stable remains 2.15.4; opt-in 2.15.5-rc.4 adds SFTP identity verification on top of
+  rc.3's #73 review fixes and rc.2's append, traversal, override and trash work.
 - Existing root-deletion preferences are preserved. Review that setting and
   restore confirmation if a failed rc.2 remote-trash attempt saved an unintended
   deletion preference. Upgrade does not silently reset legitimate saved choices.
@@ -79,9 +83,9 @@ The original #59/#69/#70 PRs were integrated without merging their individual PR
 
 ## Remaining Engineering Gates
 
-SFTP development now uses explicit fingerprint approval before authentication,
+The rc.4 SFTP candidate uses explicit fingerprint approval before authentication,
 rather than #60's silent first-use pinning, as chosen by the maintainer.
-This is unpublished work on `stabilization/sftp-host-trust`, not part of rc.3.
+This work is on `stabilization/sftp-host-trust`; earlier rc.3 assets are unchanged.
 Unit tests cover approval, persistence failures, changed keys, reconnects,
 concurrent requests and stale endpoint/reset approvals. Disposable loopback SSH
 handshakes exercise the real installed client and prove password authentication
@@ -93,7 +97,8 @@ successfully. Additional regressions cover cancellation/retry, bounded discovery
 and authentication timeouts with recovery, and a key changed between phases.
 Native Obsidian and a real
 administrator-managed SSH endpoint still need validation before claiming #60
-complete. No release or issue closure is authorized by this development step.
+complete. The maintainer approved rc.4 publication after CI, not original issue
+closure or stable promotion.
 Cancelled approval pauses prompting until Reconnect. Host-key approval is a
 separate decision from successful credential authentication; an approved key
 remains saved even if the subsequent password/key authentication fails.
@@ -116,7 +121,7 @@ Validation commands for the timeout feedback:
 
 | Priority | Work | Required outcome before claiming it is fixed |
 | --- | --- | --- |
-| Highest | SFTP host-key trust, #60 / #63 | Review the unpublished explicit-approval implementation and validate the native prompt, restart persistence, changed-key refusal, host/port edits and deliberate reset against a disposable administrator-managed SSH server. Current rc.3 assets do not contain this work. |
+| Highest | SFTP host-key trust, #60 / #63 | Publish the CI-validated rc.4 test candidate and request contributor review/testing of the native prompt, delayed approval, restart persistence, changed-key refusal, host/port edits and deliberate reset against a disposable administrator-managed SSH server. Earlier rc.3 assets do not contain this work; original reports remain open pending review. |
 | High | S3 prefix correction, #57 / #62 | Validate every caller's server-path contract, then test root/non-root prefixes on a live compatible bucket. Document that old doubled-prefix objects remain in the bucket and must be migrated explicitly; no automatic move or delete. |
 | High | S3 CopySource encoding, #68 | Integrate with #57, test spaces, punctuation and Unicode in rename/copy against a live bucket. |
 | High | Runtime dependency advisory | Current production audit reports 2 high affected-package entries, `braces` and `chokidar`, from the same braces advisory chain. Resolve or document a reviewed mitigation; do not use `npm audit fix --force` blindly. Watcher dependency upgrades require API, glob and Electron compatibility review. |

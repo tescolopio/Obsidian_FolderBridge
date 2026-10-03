@@ -10,13 +10,13 @@ Extends Obsidian's single-root vault by letting you mount external folders as se
 
 The included 2.15.3 improvements cover mounted-file refresh and cached reads, Windows/WSL path handling, watcher suppression transitions, local startup metadata batching, explorer integration, device-specific paths, and managed TOC controls. See the [changelog](CHANGELOG.md) for the complete release history.
 
-**Prerelease for testing:** [2.15.5-rc.3](https://github.com/tescolopio/Obsidian_FolderBridge/releases/tag/2.15.5-rc.3) is the opt-in safety candidate, not a stable promotion. It fixes the #73 review findings: mount moves preserve raw stored device overrides, and remote-root trash dialogs no longer offer an unsupported deletion action that could save a future permanent-delete preference. It retains rc.2's recoverable local trash, remote-trash refusal, append safety and path hardening, plus the rc.1 Android-loading and suppressed-startup fixes. Native confirmation remains pending; WebDAV remains unavailable on Android.
+**Prerelease for testing:** [2.15.5-rc.4](https://github.com/tescolopio/Obsidian_FolderBridge/releases/tag/2.15.5-rc.4) is the opt-in SFTP identity-verification candidate, not a stable promotion. Existing unpinned SFTP mounts now require independently verified fingerprint approval before authentication; changed keys are refused. Approval is outside bounded network/authentication deadlines. It retains rc.3's override-preservation and remote-root trash-dialog fixes, rc.2's recoverable local trash, remote-trash refusal, append safety and path hardening, plus rc.1's Android-loading and suppressed-startup fixes. Native confirmation remains pending; WebDAV remains unavailable on Android.
 
 **Candidate limitations:** use a disposable vault and copied sources. Local
-trash uses a separate recovery folder per deletion. SFTP host-key verification,
+trash uses a separate recovery folder per deletion. Native SFTP trust validation,
 S3 prefix/copy fixes, the non-C whole-drive ancestor policy, dependency advisories
 and native validation remain unresolved. The [release outline](docs/NEXT_RELEASE.md)
-and [rc.3 notes](CHANGELOG.md#2155-rc3---2026-10-03) distinguish included changes
+and [rc.4 notes](CHANGELOG.md#2155-rc4---2026-10-03) distinguish included changes
 from those remaining gates. Existing root-deletion preferences are preserved;
 review that setting if a failed rc.2 remote-trash attempt changed your choice.
 Stable 2.15.4 remains latest.
@@ -25,10 +25,10 @@ Stable 2.15.4 remains latest.
 
 ## Full Feature List
 
-**Unreleased SFTP development:** the working branch requires explicit host-key
-fingerprint approval before authentication; rc.3 does not include this behavior.
-Existing unpinned mounts will require approval after upgrading to a build that
-includes it. Compare the displayed fingerprint with the server administrator
+**SFTP trust in 2.15.5-rc.4:** connections require explicit host-key
+fingerprint approval before authentication; earlier prereleases do not include this behavior.
+Existing unpinned mounts require approval after upgrading to rc.4.
+Compare the displayed fingerprint with the server administrator
 over a trusted channel. Changed keys are refused; forgetting a saved key is an
 explicit edit saved in mount settings, not an automatic recovery action.
 Key discovery uses a bounded connection without authentication. That connection
