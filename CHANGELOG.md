@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.15.5-rc.4] - 2026-10-03
+
+This opt-in SFTP identity-verification test release builds on rc.3. It addresses
+the host-key concern in #60 / #63 with explicit approval rather than silent
+first-use trust. It is not stable promotion or confirmation that the original
+reports are fully resolved. Stable 2.15.4 remains latest.
+
+### Changed
+- SFTP connections require approval of the server's OpenSSH-style SHA-256 fingerprint before authentication, including existing mounts without a saved key. Approval must be saved successfully; later changed keys are refused rather than silently replaced.
+- SFTP trust is bound to the mount's host and port. Endpoint changes, transport changes and an explicit "Forget host key on save" reset require approval again. Ordinary edits retain trust. Verify new or changed keys independently with the server administrator.
+- Cancelled approval pauses further prompts until Reconnect. Concurrent connections share approval; stale/cancelled connection approvals cannot authorize authentication. Background probes close their temporary connections.
+- Close a credential-free key-discovery connection before asking for approval, keeping human verification outside the SSH handshake timeout. A fresh bounded connection must present that same approved key before authentication; changed keys or revoked/pending trust refuse the connection without another prompt.
+
+### Upgrade And Test Notes
+- Back up settings and mounted sources. Install `main.js`, `manifest.json` and `styles.css` from rc.4 together in a disposable desktop vault; existing rc.2/rc.3 tags and assets are not replaced.
+- Existing SFTP mounts without saved trust now require fingerprint approval. Independently compare the displayed key with the administrator over a trusted channel before selecting "Trust verified key". Imported/synced fingerprints are trust configuration, not independent identity verification.
+- Leave the first approval dialog open for at least 30 seconds, then approve and open a copied note. Also test cancel/Reconnect, restart persistence, host/port edits, explicit reset and changed-key refusal on a disposable server. An approved key remains saved if later credential authentication fails.
+- Record the build, OS, Obsidian version, actual wait time and redacted evidence in [native test row 19](https://github.com/tescolopio/Obsidian_FolderBridge/blob/2.15.5-rc.4/docs/NATIVE_TEST_RESULTS.md). Native Obsidian and administrator-managed SSH results are still pending.
+
+### Validation And Known Limitations
+- Local Windows lint, UI text checks, TypeScript and redirected production bundling pass. All 35 added SFTP tests pass, including seven real disposable loopback SSH tests covering a 21-second approval wait, zero authentication before approval/refusal, changed keys between phases, cancellation/retry and bounded discovery/authentication timeout recovery.
+- The Windows full suite reports 592 passed and the same four pre-existing path-separator expectation failures, 596 total across 19 files. One existing lint warning remains. Publication requires the complete Ubuntu/Node 20 PR and release validation gates; local tests are not evidence of native compatibility.
+- All [rc.3 limitations](https://github.com/tescolopio/Obsidian_FolderBridge/releases/tag/2.15.5-rc.3) remain except that this candidate now includes SFTP host-key trust. S3 prefix/copy fixes (#57/#68), dependency advisories, the whole-drive descendant-access policy and broader native validation remain outstanding. Remote recoverable trash remains unsupported.
+- SFTP remains desktop-only. Dependencies and minimum Obsidian version are unchanged. Stable promotion still requires the [remaining release gates](https://github.com/tescolopio/Obsidian_FolderBridge/blob/2.15.5-rc.4/docs/NEXT_RELEASE.md).
+
 ## [2.15.5-rc.3] - 2026-10-03
 
 This opt-in prerelease follows up on the two review findings from #73, fixed in

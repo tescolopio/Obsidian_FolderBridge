@@ -13,6 +13,7 @@ import { serializeTocConfig } from '../src/TocConfig';
 import { checkPathAccessible } from '../src/OSHelpers';
 import { browseFolderOnDisk } from '../src/ui/MountManagerModal';
 import { MountRootDeleteModal } from '../src/ui/MountRootDeleteModal';
+import { SFTPHostKeyModal } from '../src/ui/SFTPHostKeyModal';
 import { replayMountContentsToVault } from '../src/mountScan';
 import { promises as fs } from 'fs';
 import { readFileSync } from 'node:fs';
@@ -1023,6 +1024,174 @@ describe('main fallback regressions', () => {
         probe.resolve({ accessible: false, readOnly: false });
         await Promise.all([first, second]);
         expect(plugin.pathMapper.getEffectiveRealPath(plugin.settings.mountPoints[0])).toBe('/latest-root');
+    });
+});
+
+describe('SFTP host-key trust persistence', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    const sftpMount = (): MountPoint => ({
+        ...mount('sftp'), mountType: 'sftp', sftpHost: 'example.invalid', sftpUsername: 'tester',
+    });
+    const verify = (plugin: FolderBridgePlugin, target: MountPoint, fingerprint: string, signal = new AbortController().signal, allowApproval = true) =>
+        (plugin as unknown as { verifySFTPHostKey(mount: MountPoint, fingerprint: string, signal: AbortSignal, allowApproval: boolean): Promise<void> })
+            .verifySFTPHostKey(target, fingerprint, signal, allowApproval);
+    const fingerprint = 'SHA256:test-only-key-a';
+    const approve = () => vi.spyOn(SFTPHostKeyModal.prototype, 'open').mockImplementation(function () {
+        Object.assign(this, { contentEl: new SettingsElement() });
+        this.onOpen();
+        const content = this.contentEl as unknown as SettingsElement;
+        content.descendants().find(element => element.text === 'Trust verified key')!.onclick!();
+    });
+
+    it('requires approval and awaits saving the key', async () => {
+        const { plugin, saveData } = await makePlugin([sftpMount()]);
+        const save = deferred<void>();
+        saveData.mockImplementationOnce(() => save.promise);
+        const prompt = approve();
+        let completed = false;
+        const verification = verify(plugin, { ...plugin.settings.mountPoints[0] }, fingerprint).then(() => { completed = true; });
+        await vi.waitFor(() => expect(saveData).toHaveBeenCalledWith(expect.objectContaining({
+            mountPoints: [expect.objectContaining({ sftpHostKeyFingerprint: fingerprint })],
+        })));
+        expect(completed).toBe(false);
+        save.resolve();
+        await verification;
+        expect(prompt).toHaveBeenCalledOnce();
+    });
+
+    it('does not accept an in-memory pin while its persistence is still pending', async () => {
+        const { plugin, saveData } = await makePlugin([sftpMount()]);
+        const save = deferred<void>();
+        saveData.mockImplementationOnce(() => save.promise);
+        approve();
+        const target = { ...plugin.settings.mountPoints[0] };
+        const first = verify(plugin, target, fingerprint);
+        await vi.waitFor(() => expect(plugin.settings.mountPoints[0].sftpHostKeyFingerprint).toBe(fingerprint));
+        let secondFinished = false;
+        const second = verify(plugin, target, fingerprint).then(() => { secondFinished = true; });
+        await new Promise(resolve => setTimeout(resolve, 10));
+        expect(secondFinished).toBe(false);
+        save.resolve();
+        await Promise.all([first, second]);
+    });
+
+    it.each(['host', 'port', 'reset'] as const)('rejects stale approval after an intervening %s edit', async change => {
+        const { plugin } = await makePlugin([sftpMount()]);
+        let modal!: SFTPHostKeyModal;
+        vi.spyOn(SFTPHostKeyModal.prototype, 'open').mockImplementation(function () { modal = this; });
+        const target = { ...plugin.settings.mountPoints[0] };
+        const result = expect(verify(plugin, target, fingerprint)).rejects.toThrow('stale');
+        const data = { ...target };
+        if (change === 'host') data.sftpHost = 'changed.example.invalid';
+        if (change === 'port') data.sftpPort = 2222;
+        if (change === 'reset') data.sftpForgetHostKey = true;
+        await plugin.updateMount(data.id, data);
+        Object.assign(modal, { contentEl: new SettingsElement() });
+        modal.onOpen();
+        (modal.contentEl as unknown as SettingsElement).descendants().find(element => element.text === 'Trust verified key')!.onclick!();
+        await result;
+        expect(plugin.settings.mountPoints[0].sftpHostKeyFingerprint).toBeUndefined();
+    });
+
+    it('accepts an existing matching pin without prompting and rejects changed keys', async () => {
+        const { plugin } = await makePlugin([{ ...sftpMount(), sftpHostKeyFingerprint: fingerprint }]);
+        const prompt = approve();
+        await verify(plugin, plugin.settings.mountPoints[0], fingerprint);
+        await expect(verify(plugin, plugin.settings.mountPoints[0], 'SHA256:changed')).rejects.toThrow('has changed');
+        expect(prompt).not.toHaveBeenCalled();
+    });
+
+    it('never prompts during authentication if the saved pin was reset', async () => {
+        const { plugin } = await makePlugin([{ ...sftpMount(), sftpHostKeyFingerprint: fingerprint }]);
+        const target = { ...plugin.settings.mountPoints[0] };
+        await plugin.updateMount(target.id, { ...target, sftpForgetHostKey: true });
+        const prompt = approve();
+        await expect(verify(plugin, target, fingerprint, undefined, false)).rejects.toThrow('reset');
+        expect(prompt).not.toHaveBeenCalled();
+    });
+
+    it('does not wait on a different pending approval during authentication', async () => {
+        const { plugin, saveData } = await makePlugin([sftpMount()]);
+        const save = deferred<void>();
+        saveData.mockImplementationOnce(() => save.promise);
+        approve();
+        const target = { ...plugin.settings.mountPoints[0] };
+        const first = verify(plugin, target, fingerprint);
+        await vi.waitFor(() => expect(plugin.settings.mountPoints[0].sftpHostKeyFingerprint).toBe(fingerprint));
+        await expect(verify(plugin, target, fingerprint, undefined, false)).rejects.toThrow('still pending');
+        save.resolve();
+        await first;
+    });
+
+    it('rolls back a pin when persistence fails', async () => {
+        const { plugin, saveData } = await makePlugin([sftpMount()]);
+        approve();
+        saveData.mockRejectedValueOnce(new Error('Disk write failed'));
+        await expect(verify(plugin, plugin.settings.mountPoints[0], fingerprint)).rejects.toThrow('could not be saved');
+        expect(plugin.settings.mountPoints[0].sftpHostKeyFingerprint).toBeUndefined();
+    });
+
+    it('shares one prompt and rejects a concurrent different key', async () => {
+        const { plugin } = await makePlugin([sftpMount()]);
+        let modal!: SFTPHostKeyModal;
+        const prompt = vi.spyOn(SFTPHostKeyModal.prototype, 'open').mockImplementation(function () { modal = this; });
+        const target = { ...plugin.settings.mountPoints[0] };
+        const first = verify(plugin, target, fingerprint);
+        const second = expect(verify(plugin, target, 'SHA256:changed')).rejects.toThrow('has changed');
+        Object.assign(modal, { contentEl: new SettingsElement() });
+        modal.onOpen();
+        (modal.contentEl as unknown as SettingsElement).descendants().find(element => element.text === 'Trust verified key')!.onclick!();
+        await Promise.all([first, second]);
+        expect(prompt).toHaveBeenCalledOnce();
+    });
+
+    it('cancel leaves no pin and does not repeatedly prompt until reconnect', async () => {
+        const { plugin, saveData } = await makePlugin([sftpMount()]);
+        saveData.mockClear();
+        const prompt = vi.spyOn(SFTPHostKeyModal.prototype, 'open').mockImplementation(function () {
+            Object.assign(this, { contentEl: new SettingsElement() });
+            this.onClose();
+        });
+        await expect(verify(plugin, plugin.settings.mountPoints[0], fingerprint)).rejects.toThrow('cancelled');
+        await expect(verify(plugin, plugin.settings.mountPoints[0], fingerprint)).rejects.toThrow('paused');
+        expect(prompt).toHaveBeenCalledOnce();
+        expect(saveData).not.toHaveBeenCalled();
+    });
+
+    it('aborting an outstanding connection closes its prompt without saving', async () => {
+        const { plugin, saveData } = await makePlugin([sftpMount()]);
+        saveData.mockClear();
+        vi.spyOn(SFTPHostKeyModal.prototype, 'open').mockImplementation(function () {
+            Object.assign(this, { contentEl: new SettingsElement() });
+        });
+        const controller = new AbortController();
+        const result = expect(verify(plugin, plugin.settings.mountPoints[0], fingerprint, controller.signal)).rejects.toThrow('cancelled');
+        controller.abort();
+        await result;
+        expect(saveData).not.toHaveBeenCalled();
+    });
+
+    it.each(['host', 'port', 'reset', 'type'] as const)('clears trust on %s change and never persists the reset flag', async change => {
+        const { plugin, saveData } = await makePlugin([{ ...sftpMount(), sftpHostKeyFingerprint: fingerprint }]);
+        const data = { ...plugin.settings.mountPoints[0] };
+        if (change === 'host') data.sftpHost = 'new.example.invalid';
+        if (change === 'port') data.sftpPort = 2222;
+        if (change === 'reset') data.sftpForgetHostKey = true;
+        if (change === 'type') data.mountType = 's3';
+        await plugin.updateMount(data.id, data);
+        expect(plugin.settings.mountPoints[0].sftpHostKeyFingerprint).toBeUndefined();
+        expect(saveData).toHaveBeenLastCalledWith(expect.objectContaining({
+            mountPoints: [expect.not.objectContaining({ sftpForgetHostKey: true })],
+        }));
+    });
+
+    it('ordinary edits preserve the pin even if the input omits it', async () => {
+        const { plugin } = await makePlugin([{ ...sftpMount(), sftpHostKeyFingerprint: fingerprint }]);
+        const data = { ...plugin.settings.mountPoints[0], virtualPath: 'Moved' };
+        delete data.sftpHostKeyFingerprint;
+        await plugin.updateMount(data.id, data);
+        expect(plugin.settings.mountPoints[0].sftpHostKeyFingerprint).toBe(fingerprint);
     });
 });
 

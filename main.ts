@@ -5,6 +5,7 @@ import { VirtualAdapter } from './src/VirtualAdapter';
 import { SecurityManager } from './src/SecurityManager';
 import { MountManagerModal, getMountStatus, browseFolderOnDisk, browseMultipleFoldersOnDisk, VaultFolderPickerModal } from './src/ui/MountManagerModal';
 import { MountRootDeleteModal } from './src/ui/MountRootDeleteModal';
+import { SFTPHostKeyModal } from './src/ui/SFTPHostKeyModal';
 import { WelcomeModal } from './src/ui/WelcomeModal';
 import { checkPathAccessible, getPlatform, realPathToResourceUrl, tryReadAsDataUri } from './src/OSHelpers';
 import { FileServer } from './src/FileServer';
@@ -95,6 +96,100 @@ function backgroundTask(task: Promise<void>, context: string, pluginName = 'Fold
 // ---------------------------------------------------------------------------
 
 export default class FolderBridgePlugin extends Plugin {
+	private sftpTrustRequests = new Map<string, Promise<void>>();
+	private sftpTrustModals = new Set<SFTPHostKeyModal>();
+	private sftpTrustUnloaded = false;
+	private sftpTrustRevisions = new Map<string, number>();
+	private sftpTrustCancelled = new Set<string>();
+	private reportedSftpTrustErrors = new Map<string, string>();
+
+	private createSFTPAdapter(mount: MountPoint): SFTPAdapter | null {
+		const snapshot = { ...mount };
+		return SFTPAdapter.fromMount(snapshot, async (fingerprint, signal, allowApproval) => {
+			try {
+				await this.verifySFTPHostKey(snapshot, fingerprint, signal, allowApproval);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				logger.warn(`[Folder Bridge] ${message}`);
+				if (this.reportedSftpTrustErrors.get(mount.id) !== message) {
+					this.reportedSftpTrustErrors.set(mount.id, message);
+					new Notice(`Folder Bridge: ${message}`, 10000);
+				}
+				throw error;
+			}
+		});
+	}
+
+	private async verifySFTPHostKey(mount: MountPoint, fingerprint: string, signal: AbortSignal, allowApproval = true): Promise<void> {
+		const revision = this.sftpTrustRevisions.get(mount.id) ?? 0;
+		const endpointMatches = (stored: MountPoint) => stored.mountType === 'sftp'
+			&& stored.sftpHost === mount.sftpHost && (stored.sftpPort ?? 22) === (mount.sftpPort ?? 22);
+		const current = () => {
+			const stored = this.persistedMountPoints.find(entry => entry.id === mount.id);
+			if (signal.aborted || this.sftpTrustUnloaded || !stored || !endpointMatches(stored)
+				|| revision !== (this.sftpTrustRevisions.get(mount.id) ?? 0)) {
+				throw new Error('SFTP trust request is stale. Reconnect the current mount.');
+			}
+			return stored;
+		};
+		const checkPin = (stored: MountPoint): boolean => {
+			if (!stored.sftpHostKeyFingerprint) return false;
+			if (stored.sftpHostKeyFingerprint !== fingerprint) {
+				throw new Error(`SFTP host key for ${mount.sftpHost}:${mount.sftpPort ?? 22} has changed. Expected ${stored.sftpHostKeyFingerprint}; received ${fingerprint}. Connection refused. Verify the change independently before forgetting the saved key.`);
+			}
+			return true;
+		};
+		const key = JSON.stringify([mount.id, mount.sftpHost, mount.sftpPort ?? 22]);
+		const pending = this.sftpTrustRequests.get(key);
+		if (pending) {
+			if (!allowApproval) throw new Error('SFTP host key approval is still pending. Reconnect after approval is saved.');
+			await pending;
+			if (!checkPin(current())) throw new Error('SFTP host key approval was not saved.');
+			return;
+		}
+		if (checkPin(current())) return;
+		if (!allowApproval) throw new Error('SFTP host key approval was reset. Reconnect to verify the server again.');
+		if (this.sftpTrustCancelled.has(key)) throw new Error('SFTP host key approval is paused. Use Reconnect to try again.');
+		const request = (async () => {
+			const accepted = await new Promise<boolean>(resolve => {
+				const modal = new SFTPHostKeyModal(this.app, `${mount.sftpHost}:${mount.sftpPort ?? 22}`, fingerprint, value => {
+					signal.removeEventListener('abort', abort);
+					this.sftpTrustModals.delete(modal);
+					resolve(value);
+				});
+				const abort = () => modal.close();
+				signal.addEventListener('abort', abort, { once: true });
+				this.sftpTrustModals.add(modal);
+				modal.open();
+			});
+			if (!accepted) {
+				this.sftpTrustCancelled.add(key);
+				throw new Error('SFTP host key approval cancelled. No authentication was performed.');
+			}
+			const stored = current();
+			if (checkPin(stored)) return;
+			stored.sftpHostKeyFingerprint = fingerprint;
+			try {
+				await this.saveSettings();
+			} catch (error) {
+				delete stored.sftpHostKeyFingerprint;
+				const latest = this.persistedMountPoints.find(entry => entry.id === mount.id);
+				if (latest && endpointMatches(latest) && latest.sftpHostKeyFingerprint === fingerprint) {
+					delete latest.sftpHostKeyFingerprint;
+				}
+				this.syncEffectiveMountState();
+				throw new Error(`SFTP host key could not be saved: ${error instanceof Error ? error.message : String(error)}`);
+			}
+			if (!checkPin(current())) throw new Error('SFTP host key approval was reset while saving.');
+			this.syncEffectiveMountState();
+		})();
+		this.sftpTrustRequests.set(key, request);
+		try {
+			await request;
+		} finally {
+			if (this.sftpTrustRequests.get(key) === request) this.sftpTrustRequests.delete(key);
+		}
+	}
 	settings: FolderBridgeSettings;
 	pathMapper: PathMapper;
 	security: SecurityManager;
@@ -952,7 +1047,7 @@ export default class FolderBridgePlugin extends Plugin {
 							const plain = decryptCredential(mount.encryptedSftpPassphrase);
 							if (plain) saveSessionCredential('sftp-pp', mount.id, plain);
 						}
-						const sftpAdapter = SFTPAdapter.fromMount(mount);
+						const sftpAdapter = this.createSFTPAdapter(mount);
 						if (sftpAdapter) this.virtualAdapter?.setSFTPAdapter(mount.id, sftpAdapter);
 					}
 				}
@@ -997,6 +1092,9 @@ export default class FolderBridgePlugin extends Plugin {
 	}
 
 	onunload() {
+		this.sftpTrustUnloaded = true;
+		for (const modal of this.sftpTrustModals) modal.close();
+		this.sftpTrustModals.clear();
 		this.explorerUnloaded = true;
 		for (const timer of this.explorerTimers) clearTimeout(timer);
 		this.explorerTimers.clear();
@@ -2053,7 +2151,7 @@ export default class FolderBridgePlugin extends Plugin {
 					await this.saveSettings();
 				}
 			}
-			const sftpAdapter = SFTPAdapter.fromMount(mount);
+			const sftpAdapter = this.createSFTPAdapter(mount);
 			if (sftpAdapter) this.virtualAdapter?.setSFTPAdapter(mount.id, sftpAdapter);
 		}
 
@@ -2224,6 +2322,20 @@ export default class FolderBridgePlugin extends Plugin {
 			? this.managedTocMountPoints.find(mount => mount.id === id)
 			: this.persistedMountPoints[idx];
 		if (!storedMount) return;
+		const forgetSftpHostKey = newData.sftpForgetHostKey === true;
+		const endpointChanged = storedMount.sftpHost !== newData.sftpHost
+			|| (storedMount.sftpPort ?? 22) !== (newData.sftpPort ?? 22);
+		const mountData = { ...newData };
+		delete mountData.sftpForgetHostKey;
+		if (forgetSftpHostKey || endpointChanged || newData.mountType !== storedMount.mountType) {
+			this.sftpTrustRevisions.set(id, (this.sftpTrustRevisions.get(id) ?? 0) + 1);
+			this.sftpTrustCancelled.delete(JSON.stringify([id, newData.sftpHost, newData.sftpPort ?? 22]));
+		}
+		newData = {
+			...mountData,
+			sftpHostKeyFingerprint: forgetSftpHostKey || endpointChanged || newData.mountType !== 'sftp'
+				? undefined : storedMount.sftpHostKeyFingerprint,
+		};
 
 		// Ordinary edits can originate from a sanitized runtime mount, not its raw override map.
 		newData = {
@@ -2425,7 +2537,7 @@ export default class FolderBridgePlugin extends Plugin {
 				}
 			}
 			this.virtualAdapter?.clearSFTPAdapter(id);
-			const sftpAdapter = SFTPAdapter.fromMount(updatedMount);
+			const sftpAdapter = this.createSFTPAdapter(updatedMount);
 			if (sftpAdapter) this.virtualAdapter?.setSFTPAdapter(id, sftpAdapter);
 		} else if (oldMount.mountType === 'sftp') {
 			this.virtualAdapter?.clearSFTPAdapter(id);
@@ -2713,8 +2825,14 @@ export default class FolderBridgePlugin extends Plugin {
 						const s3 = S3Adapter.fromMount(mount);
 						if (s3) reachable = (await s3.testConnection()) === null;
 					} else if (mount.mountType === 'sftp') {
-						const sftpAdapter = SFTPAdapter.fromMount(mount);
-						if (sftpAdapter) reachable = (await sftpAdapter.testConnection()) === null;
+						const sftpAdapter = this.createSFTPAdapter(mount);
+						if (sftpAdapter) {
+							try {
+								reachable = (await sftpAdapter.testConnection()) === null;
+							} finally {
+								await sftpAdapter.disconnect();
+							}
+						}
 					} else {
 						// Local mounts require Node.js fs — unavailable on mobile
 						if (fs && fs.promises) {
@@ -2757,6 +2875,8 @@ export default class FolderBridgePlugin extends Plugin {
 	 * Called from the settings tab "Reconnect" button.
 	 */
 	async reconnectMount(mount: MountPoint): Promise<void> {
+		this.sftpTrustCancelled.delete(JSON.stringify([mount.id, mount.sftpHost, mount.sftpPort ?? 22]));
+		this.reportedSftpTrustErrors.delete(mount.id);
 		let reachable = false;
 		try {
 			if (mount.mountType === 'webdav') {
@@ -2766,8 +2886,14 @@ export default class FolderBridgePlugin extends Plugin {
 				const s3 = S3Adapter.fromMount(mount);
 				if (s3) reachable = (await s3.testConnection()) === null;
 			} else if (mount.mountType === 'sftp') {
-				const sftpAdapter = SFTPAdapter.fromMount(mount);
-				if (sftpAdapter) reachable = (await sftpAdapter.testConnection()) === null;
+				const sftpAdapter = this.createSFTPAdapter(mount);
+				if (sftpAdapter) {
+					try {
+						reachable = (await sftpAdapter.testConnection()) === null;
+					} finally {
+						await sftpAdapter.disconnect();
+					}
+				}
 			} else {
 				if (fs && fs.promises) {
 					await this.resolveMountPath(mount);
@@ -2908,6 +3034,7 @@ export default class FolderBridgePlugin extends Plugin {
 				delete rest.s3SecretKey;
 				delete rest.sftpPassword;
 				delete rest.sftpPassphrase;
+				delete rest.sftpForgetHostKey;
 				delete rest.tocSourcePath;
 				return rest;
 			}),
