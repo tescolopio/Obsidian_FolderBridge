@@ -1,5 +1,13 @@
 # Compatibility Release Validation
 
+## Next Candidate
+
+The October 2 stabilization work is tracked in the
+[next release outline](NEXT_RELEASE.md). It is not published. Use its exact
+revision, rather than older stable or prerelease assets, for the new trash and
+device-override checks in [the results sheet](NATIVE_TEST_RESULTS.md).
+The historical evidence below remains scoped to the builds named there.
+
 ## Current Release And Evidence
 
 As of 2026-09-20, the latest stable release is

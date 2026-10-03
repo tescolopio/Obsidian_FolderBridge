@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+These changes are being prepared on the stabilization branch. They are not in
+stable 2.15.4 or the published 2.15.5-rc.1 assets. See the
+[next release outline](docs/NEXT_RELEASE.md) for scope and outstanding gates.
+
+### Fixed
+- Reject traversal segments in file-server requests (#55).
+- Abort remote append when the read fails for reasons other than a missing file, instead of overwriting existing contents (#56).
+- Validate local device overrides and remove unsafe overrides from this device's effective mount routing while preserving stored settings (#58, #70). Remote server-relative overrides remain unchanged. Enabled/ignore-list edits preserve the raw override map in data.json and managed TOC files; watcher reinjection and restart use safe runtime mounts.
+- Refuse additional system and credential paths during mount validation, including the exact macOS `/private` parent, its protected descendants, and Windows system directories on other drives (#69). Whole-drive mounts remain supported; the any-drive root ancestor gap is unresolved pending a descendant-access policy.
+- Keep local and vault-mounted trash recoverable in the current vault's `.trash/folderbridge-<unique>/<original-name>`. Each deletion reserves its own recovery folder, preventing collisions between concurrent deletions. Cross-volume copies remove the source only after copying succeeds; failures report the recovery location (#59).
+- Return `false` when system trash fails or is unavailable so Obsidian can use its local-trash fallback. Root confirmation is reused only briefly and for the same effective source path.
+- Describe trash versus permanent deletion correctly in the mount-root confirmation.
+
+### Changed
+- WebDAV, S3 and SFTP trash requests now fail explicitly without deleting remote data. Explicit permanent-delete operations remain available. Remote download-to-trash recovery is not implemented.
+- Make lint and UI-copy validation paths portable on Windows. Production builds can set `FOLDERBRIDGE_BUILD_OUTFILE` to validate without overwriting an installed plugin.
+
 ## [2.15.5-rc.1] - 2026-09-20
 
 This opt-in prerelease adds two fixes on top of stable 2.15.4, which remains the

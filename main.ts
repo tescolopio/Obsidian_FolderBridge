@@ -381,6 +381,7 @@ export default class FolderBridgePlugin extends Plugin {
 		return { moved: movableMounts.length, skipped };
 	}
 
+	/** Persist UI edits against raw state; device override changes go through updateMount(). */
 	async persistEditableMountFromState(mount: MountPoint): Promise<boolean> {
 		if (!this.isUserEditableMount(mount)) return false;
 
@@ -389,7 +390,8 @@ export default class FolderBridgePlugin extends Plugin {
 			if (managedIndex === -1) return false;
 
 			const nextManagedMounts = this.getManagedTocDraftMounts();
-			const updatedMount = { ...mount };
+			const storedMount = nextManagedMounts[managedIndex];
+			const updatedMount = { ...storedMount, ...mount, deviceOverrides: storedMount.deviceOverrides };
 			delete updatedMount.tocSourcePath;
 			nextManagedMounts[managedIndex] = updatedMount;
 			if (!await this.writeManagedTocMounts(nextManagedMounts)) return false;
@@ -398,6 +400,15 @@ export default class FolderBridgePlugin extends Plugin {
 			return true;
 		}
 
+		const persistedIndex = this.persistedMountPoints.findIndex(existing => existing.id === mount.id);
+		if (persistedIndex === -1) {
+			new Notice(`Folder Bridge: Cannot save "${mount.virtualPath}" because the mount no longer exists.`);
+			return false;
+		}
+		const storedMount = this.persistedMountPoints[persistedIndex];
+		this.persistedMountPoints[persistedIndex] = {
+			...storedMount, ...mount, deviceOverrides: storedMount.deviceOverrides,
+		};
 		await this.saveSettings();
 		this.syncEffectiveMountState();
 		return true;
@@ -419,9 +430,8 @@ export default class FolderBridgePlugin extends Plugin {
 		if (!override) return mount.realPath;
 		// Mounts loaded straight from data.json (e.g. synced from another device)
 		// never pass through validateMount(), so re-check the override here and
-		// refuse to allowlist a protected path.  The mount then fails closed:
-		// PathMapper still resolves to the override, but every guarded read and
-		// write is denied because the path is not on the allowlist.
+		// refuse to allowlist a protected path. syncEffectiveMountState also
+		// removes unsafe overrides from the effective PathMapper view.
 		const validator = this.security ?? new SecurityManager([]);
 		const error = validator.validateDeviceOverrides({ [this.settings.deviceId]: override });
 		if (error) {
@@ -435,12 +445,40 @@ export default class FolderBridgePlugin extends Plugin {
 		return mount.mountType === 'webdav' || mount.mountType === 's3' || mount.mountType === 'sftp';
 	}
 
+	/** Mount ids whose unsafe device override was already reported this session. */
+	private reportedUnsafeOverrides = new Set<string>();
+
+	/**
+	 * Returns the mount without this device's override when that override points
+	 * at a protected path.  Mounts loaded from data.json or a shared TOC file
+	 * never pass through validateMount(), so without this PathMapper would still
+	 * resolve reads, listings and metadata to the protected folder even though
+	 * it is refused an allowlist entry.  Only the effective view is changed; the
+	 * stored mount keeps its override.
+	 */
+	private withSafeDeviceOverride(mount: MountPoint): MountPoint {
+		if (this.isCloudMount(mount)) return mount;
+		const deviceId = this.settings.deviceId;
+		const override = mount.deviceOverrides?.[deviceId];
+		if (!override) return mount;
+		const validator = this.security ?? new SecurityManager([]);
+		const error = validator.validateDeviceOverrides({ [deviceId]: override });
+		if (!error) return mount;
+		if (!this.reportedUnsafeOverrides.has(mount.id)) {
+			this.reportedUnsafeOverrides.add(mount.id);
+			logger.warn(`[FolderBridge] Ignoring device override for mount "${mount.virtualPath}": ${error}`);
+			new Notice(`Folder Bridge: Ignored an unsafe device path for "${mount.virtualPath}" and used the mount's normal path instead.`, 8000);
+		}
+		const remaining = Object.fromEntries(Object.entries(mount.deviceOverrides ?? {}).filter(([id]) => id !== deviceId));
+		return { ...mount, deviceOverrides: remaining };
+	}
+
 	private syncEffectiveMountState(): void {
 		const effectiveMounts = [
 			...this.persistedMountPoints,
 			...this.managedTocMountPoints,
 			...this.externalTocMountPoints,
-		];
+		].map(mount => this.withSafeDeviceOverride(mount));
 		const effectiveAllowlist = Array.from(new Set([
 			...this.persistedAllowlist,
 			...effectiveMounts
@@ -1628,7 +1666,7 @@ export default class FolderBridgePlugin extends Plugin {
 			this.security,
 			this.settings.dryRun,
 			(this.settings.maxDataUriMB ?? 10) * 1024 * 1024,
-			async (mount: MountPoint) => {
+			async (mount: MountPoint, trash = false) => {
 				let action: 'unmount' | 'delete' | 'cancel' = 'cancel';
 
 				if (this.settings.mountRootDeletionBehavior === 'unmount') {
@@ -1649,7 +1687,7 @@ export default class FolderBridgePlugin extends Plugin {
 							} else {
 								resolve(result);
 							}
-						});
+						}, trash);
 						modal.open();
 					});
 				}
@@ -2315,7 +2353,10 @@ export default class FolderBridgePlugin extends Plugin {
 		this.syncEffectiveMountState();
 		this.updateStatusBar();
 
-		const updatedMount = this.persistedMountPoints[idx];
+		const updatedMount = this.settings.mountPoints.find(existing => existing.id === id);
+		if (!updatedMount) {
+			throw new Error(`Folder Bridge: Updated mount "${id}" is missing from the runtime state.`);
+		}
 
 		// Recreate adapters when mount type or credentials change
 		if (updatedMount.mountType === 'webdav') {
@@ -2420,6 +2461,7 @@ export default class FolderBridgePlugin extends Plugin {
 	 * as a folder and inserts it into its internal TFolder tree.
 	 */
 	async notifyVaultMountAdded(mount: MountPoint): Promise<void> {
+		mount = this.withSafeDeviceOverride(mount);
 		const token = Symbol();
 		this.mountInjections.set(mount.id, token);
 		const isCurrent = () => this.mountInjections.get(mount.id) === token;
@@ -2961,11 +3003,11 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Mount root deletion behavior')
-			.setDesc('What should happen when you delete a mounted folder from the file explorer?')
+			.setDesc('Choose whether to unmount or delete the real folder. Real deletion follows Obsidian\'s selected trash or permanent-delete mode.')
 			.addDropdown(drop => drop
 				.addOption('ask', 'Ask me every time')
 				.addOption('unmount', 'Unmount only (keep real files)')
-				.addOption('delete', 'Delete permanently (destroy real files)')
+				.addOption('delete', 'Delete real folder using the selected deletion mode')
 				.setValue(this.plugin.settings.mountRootDeletionBehavior)
 				.onChange((val: 'ask' | 'unmount' | 'delete') => {
 					void (async () => {

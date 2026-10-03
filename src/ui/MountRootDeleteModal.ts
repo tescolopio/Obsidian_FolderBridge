@@ -6,7 +6,7 @@ export class MountRootDeleteModal extends Modal {
     private dontAskAgain = false;
     private resolved = false;
 
-    constructor(app: App, private mountPath: string, resolve: (value: 'unmount' | 'delete' | 'unmount-always' | 'delete-always' | 'cancel') => void | Promise<void>) {
+    constructor(app: App, private mountPath: string, resolve: (value: 'unmount' | 'delete' | 'unmount-always' | 'delete-always' | 'cancel') => void | Promise<void>, private trash = false) {
         super(app);
         this.resolve = resolve;
     }
@@ -27,7 +27,9 @@ export class MountRootDeleteModal extends Modal {
         });
 
         contentEl.createEl('p', {
-            text: 'Do you want to permanently delete the real folder on disk, or just unmount it from Obsidian?'
+            text: this.trash
+                ? 'Do you want to move the real folder to trash, or just unmount it from Obsidian? Remote mounts do not support recoverable trash.'
+                : 'Do you want to permanently delete the real folder on disk, or just unmount it from Obsidian?'
         });
 
         new Setting(contentEl)
@@ -59,7 +61,10 @@ export class MountRootDeleteModal extends Modal {
             }
         };
 
-        const btnDelete = buttonContainer.createEl('button', { text: 'Delete real folder', cls: 'mod-warning' });
+        const btnDelete = buttonContainer.createEl('button', {
+            text: this.trash ? 'Move real folder to trash' : 'Delete real folder',
+            cls: 'mod-warning',
+        });
         btnDelete.onclick = () => {
             if (!this.resolved) {
                 this.resolved = true;

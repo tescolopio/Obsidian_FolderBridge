@@ -42,7 +42,7 @@ export class VirtualAdapter {
 	private pathMapper: PathMapper;
 	private security: SecurityManager;
 	private dryRun: boolean;
-	private onMountRootDelete: (mount: MountPoint) => Promise<'unmount' | 'delete' | 'cancel'>;
+	private onMountRootDelete: (mount: MountPoint, trash?: boolean) => Promise<'unmount' | 'delete' | 'cancel'>;
 	private onMountRootMove: (mount: MountPoint, newVirtualPath: string) => Promise<void>;
 	private isIgnored: (name: string, mount: MountPoint, mountRelativePath?: string) => boolean;
 	/** WebDAV client instances keyed by mount.id, managed by the plugin. */
@@ -82,7 +82,7 @@ export class VirtualAdapter {
 		security: SecurityManager,
 		dryRun = false,
 		maxDataUriBytes = 10 * 1024 * 1024,
-		onMountRootDelete: (mount: MountPoint) => Promise<'unmount' | 'delete' | 'cancel'>,
+		onMountRootDelete: (mount: MountPoint, trash?: boolean) => Promise<'unmount' | 'delete' | 'cancel'>,
 		onMountRootMove: (mount: MountPoint, newVirtualPath: string) => Promise<void>,
 		isIgnored: (name: string, mount: MountPoint, mountRelativePath?: string) => boolean,
 		onModify?: (normalizedPath: string) => Promise<void>,
@@ -926,8 +926,30 @@ export class VirtualAdapter {
 	// trash / remove
 	// ------------------------------------------------------------------
 
-	private async handleRootMountDeletion(rootMount: MountPoint): Promise<boolean> {
-		const action = await this.onMountRootDelete(rootMount);
+	/**
+	 * Mount roots whose real deletion the user already confirmed in
+	 * trashSystem().  When the system trash then fails and Obsidian falls
+	 * back to trashLocal(), the confirmation is consumed instead of asking
+	 * the same question a second time.  Entries expire quickly so a stale
+	 * confirmation can never silently authorise a later, unrelated delete.
+	 */
+	private confirmedRootDeletions: Map<string, number> = new Map();
+	private static readonly ROOT_DELETION_CONFIRM_TTL_MS = 5000;
+
+	private rootDeletionConfirmationKey(mount: MountPoint): string {
+		return JSON.stringify([mount.id, this.pathMapper.getEffectiveRealPath(mount)]);
+	}
+
+	private consumeRootDeletionConfirmation(mount: MountPoint): boolean {
+		const key = this.rootDeletionConfirmationKey(mount);
+		const confirmedAt = this.confirmedRootDeletions.get(key);
+		this.confirmedRootDeletions.delete(key);
+		return confirmedAt !== undefined &&
+			Date.now() - confirmedAt <= VirtualAdapter.ROOT_DELETION_CONFIRM_TTL_MS;
+	}
+
+	private async handleRootMountDeletion(rootMount: MountPoint, trash = false): Promise<boolean> {
+		const action = await this.onMountRootDelete(rootMount, trash);
 		if (action === 'cancel') {
 			throw new Error(`Folder Bridge: Deletion cancelled.`);
 		}
@@ -939,10 +961,17 @@ export class VirtualAdapter {
 		return false; // Proceed with real deletion
 	}
 
+	private assertRecoverableTrash(mount: MountPoint): void {
+		if (mount.mountType === 'webdav' || mount.mountType === 's3' || mount.mountType === 'sftp') {
+			throw new Error(`Folder Bridge: Recoverable trash is unavailable for ${mount.mountType} mounts. The item was not deleted. Use an explicit permanent-delete action only if you intend to delete it permanently.`);
+		}
+	}
+
 	async trashSystem(normalizedPath: string): Promise<boolean> {
 		const rootMount = this.pathMapper.getMountByVirtualPath(normalizedPath);
 		if (rootMount) {
-			const handled = await this.handleRootMountDeletion(rootMount);
+			this.confirmedRootDeletions.delete(this.rootDeletionConfirmationKey(rootMount));
+			const handled = await this.handleRootMountDeletion(rootMount, true);
 			if (handled) return true;
 		}
 
@@ -950,50 +979,80 @@ export class VirtualAdapter {
 		if (mount) {
 			if (mount.readOnly) { this.warnReadOnly(mount); return true; }
 			if (this.isPathIgnored(normalizedPath, mount)) throw new Error(`Folder Bridge: Cannot trash ignored path "${normalizedPath}"`);
+			this.assertRecoverableTrash(mount);
 			const realPath = this.toReal(normalizedPath, mount);
-			const webdavTS = this.getWebDAV(mount);
-			if (webdavTS) {
-				if (this.dryRun) { logger.debug(`[FolderBridge DryRun] trashSystem (webdav) → ${this.toServerPath(normalizedPath, mount)}`); return true; }
-				await webdavTS.remove(this.toServerPath(normalizedPath, mount));
-				await this.notifyDelete(normalizedPath);
-				return true;
-			}
-			const s3TS = this.getS3(mount);
-			if (s3TS) {
-				if (this.dryRun) { logger.debug(`[FolderBridge DryRun] trashSystem (s3) → ${this.toServerPath(normalizedPath, mount)}`); return true; }
-				await s3TS.remove(this.toServerPath(normalizedPath, mount));
-				await this.notifyDelete(normalizedPath);
-				return true;
-			}
-			const sftpTS = this.getSFTP(mount);
-			if (sftpTS) {
-				if (this.dryRun) { logger.debug(`[FolderBridge DryRun] trashSystem (sftp) → ${this.toServerPath(normalizedPath, mount)}`); return true; }
-				await sftpTS.remove(this.toServerPath(normalizedPath, mount));
-				await this.notifyDelete(normalizedPath);
-				return true;
-			}
 			this.assertAllowed(realPath);
 			if (this.dryRun) { logger.debug(`[FolderBridge DryRun] trashSystem → ${realPath}`); return true; }
-			try {
-				const electron = loadOptionalNodeModule<{ shell?: { trashItem(p: string): Promise<string> } }>('electron');
-				const shell = electron?.shell;
-				await shell?.trashItem(realPath);
-				await this.notifyDelete(normalizedPath);
-				return true;
-			} catch {
-				// Fallback: permanent delete
-				await fs.promises.rm(realPath, { recursive: true, force: true });
-				await this.notifyDelete(normalizedPath);
-				return true;
+			// Never fall back to a permanent delete here.  Per the DataAdapter
+			// contract, returning false tells Obsidian the system trash is
+			// unavailable (network volume, no trash support, no Electron shell)
+			// and it then calls trashLocal(), which keeps the data recoverable.
+			const electron = loadOptionalNodeModule<{ shell?: { trashItem(p: string): Promise<void> } }>('electron');
+			const shell = electron?.shell;
+			if (!shell?.trashItem) {
+				logger.warn('[FolderBridge] System trash is unavailable; use the vault trash fallback.');
+				if (rootMount) this.confirmedRootDeletions.set(this.rootDeletionConfirmationKey(rootMount), Date.now());
+				return false;
 			}
+			try {
+				await shell.trashItem(realPath);
+			} catch (e) {
+				logger.warn(`[FolderBridge] System trash unavailable for "${realPath}"; falling back to the vault .trash folder.`, e);
+				if (rootMount) this.confirmedRootDeletions.set(this.rootDeletionConfirmationKey(rootMount), Date.now());
+				return false;
+			}
+			await this.notifyDelete(normalizedPath);
+			return true;
 		}
 		return this.orig().trashSystem(normalizedPath);
 	}
 
+	private async moveToVaultTrash(realPath: string): Promise<void> {
+		const basePath = (this.orig() as DataAdapter & { getBasePath?(): string }).getBasePath?.();
+		if (!basePath) {
+			throw new Error('Folder Bridge: cannot locate the vault .trash folder, so the item was not deleted.');
+		}
+		const basename = path.basename(realPath);
+		if (!basename) {
+			throw new Error('Folder Bridge: A filesystem root cannot be moved to the vault trash.');
+		}
+		const trashDir = path.join(basePath, '.trash');
+		await fs.promises.mkdir(trashDir, { recursive: true });
+		const [source, trash] = await Promise.all([
+			fs.promises.realpath(realPath),
+			fs.promises.realpath(trashDir),
+		]);
+		const relativeTrash = path.relative(source, trash);
+		if (!relativeTrash || (!path.isAbsolute(relativeTrash) && relativeTrash !== '..' && !relativeTrash.startsWith(`..${path.sep}`))) {
+			throw new Error('Folder Bridge: The vault trash is inside the item being deleted. The item was not deleted.');
+		}
+
+		// Reserve a private directory atomically; concurrent deletions never share a destination.
+		const recoveryDir = await fs.promises.mkdtemp(path.join(trashDir, 'folderbridge-'));
+		const destination = path.join(recoveryDir, basename);
+		try {
+			try {
+				await fs.promises.rename(realPath, destination);
+			} catch (e) {
+				const err = e as NodeJS.ErrnoException;
+				if (err.code !== 'EXDEV') throw e;
+				await fs.promises.cp(realPath, destination, {
+					recursive: true, errorOnExist: true, force: false,
+					mode: fs.constants.COPYFILE_EXCL, preserveTimestamps: true, verbatimSymlinks: true,
+				});
+				await fs.promises.rm(realPath, { recursive: true });
+			}
+		} catch (e) {
+			const err = e as NodeJS.ErrnoException;
+			logger.error(`[FolderBridge] Trash failed; recovery data, if created, is at "${destination}".`, e);
+			throw new Error(`Folder Bridge: ${translateFsError(err, 'trash')} Recovery data, if created, is at "${destination}".`);
+		}
+	}
+
 	async trashLocal(normalizedPath: string, system?: boolean): Promise<void> {
 		const rootMount = this.pathMapper.getMountByVirtualPath(normalizedPath);
-		if (rootMount) {
-			const handled = await this.handleRootMountDeletion(rootMount);
+		if (rootMount && !this.consumeRootDeletionConfirmation(rootMount)) {
+			const handled = await this.handleRootMountDeletion(rootMount, true);
 			if (handled) return;
 		}
 
@@ -1001,31 +1060,11 @@ export class VirtualAdapter {
 		if (mount) {
 			if (mount.readOnly) { this.warnReadOnly(mount); return; }
 			if (this.isPathIgnored(normalizedPath, mount)) throw new Error(`Folder Bridge: Cannot trash ignored path "${normalizedPath}"`);
+			this.assertRecoverableTrash(mount);
 			const realPath = this.toReal(normalizedPath, mount);
-			const webdavTL = this.getWebDAV(mount);
-			if (webdavTL) {
-				if (this.dryRun) { logger.debug(`[FolderBridge DryRun] trashLocal (webdav) → ${this.toServerPath(normalizedPath, mount)}`); return; }
-				await webdavTL.remove(this.toServerPath(normalizedPath, mount));
-				await this.notifyDelete(normalizedPath);
-				return;
-			}
-			const s3TL = this.getS3(mount);
-			if (s3TL) {
-				if (this.dryRun) { logger.debug(`[FolderBridge DryRun] trashLocal (s3) → ${this.toServerPath(normalizedPath, mount)}`); return; }
-				await s3TL.remove(this.toServerPath(normalizedPath, mount));
-				await this.notifyDelete(normalizedPath);
-				return;
-			}
-			const sftpTL = this.getSFTP(mount);
-			if (sftpTL) {
-				if (this.dryRun) { logger.debug(`[FolderBridge DryRun] trashLocal (sftp) → ${this.toServerPath(normalizedPath, mount)}`); return; }
-				await sftpTL.remove(this.toServerPath(normalizedPath, mount));
-				await this.notifyDelete(normalizedPath);
-				return;
-			}
 			this.assertAllowed(realPath);
 			if (this.dryRun) { logger.debug(`[FolderBridge DryRun] trashLocal → ${realPath}`); return; }
-			await fs.promises.rm(realPath, { recursive: true, force: true });
+			await this.moveToVaultTrash(realPath);
 			await this.notifyDelete(normalizedPath);
 			return;
 		}

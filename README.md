@@ -12,6 +12,12 @@ The included 2.15.3 improvements cover mounted-file refresh and cached reads, Wi
 
 **Prerelease for testing:** [2.15.5-rc.1](https://github.com/tescolopio/Obsidian_FolderBridge/releases/tag/2.15.5-rc.1) is an opt-in prerelease, not the latest stable release. It fixes the plugin failing to load on Android (#18) and mounts with suppressed watcher events appearing empty after restart (#16). WebDAV mounts do not work on Android in that build. Use a disposable vault and back up your sources.
 
+**Next release preparation:** source-file safety and path-hardening work is
+unreleased. The [release outline](docs/NEXT_RELEASE.md) distinguishes integrated
+changes from pending PRs, upgrade behavior and required native checks. In that
+candidate, local trash uses a separate recovery folder per deletion; remote
+trash requests are rejected rather than silently deleting data permanently.
+
 **Validation limits (stable 2.15.4):** the release passed 400 automated tests across 13 files, plus lint, UI text checks, typechecking, and the production build. The full native Windows/WSL, macOS, Android, and current/oldest Obsidian host checks remain incomplete. Reporters confirmed two specific fixes on the earlier rc.2 build, not the complete 2.15.4 matrix. Automated tests do not establish native editor, Outline, metadata, or save compatibility. Back up your vault, settings, and mounted source folders; test writes on disposable copies. See the [release validation checklist](docs/RELEASE_VALIDATION.md).
 
 ## Full Feature List

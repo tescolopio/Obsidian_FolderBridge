@@ -98,6 +98,18 @@ npm run build
 - No source maps (smaller file size)
 - Use for final testing and releases
 
+When the checkout is inside an active vault, redirect the bundle to avoid
+replacing the installed plugin or triggering hot reload during validation:
+
+```powershell
+$env:FOLDERBRIDGE_BUILD_OUTFILE = Join-Path $env:TEMP 'folderbridge-validation\main.js'
+npm run validate
+Remove-Item Env:\FOLDERBRIDGE_BUILD_OUTFILE
+```
+
+Without this variable, builds still write to `main.js` as before. Install a
+candidate's matching bundle, manifest and styles only in a disposable test vault.
+
 #### UI copy style check
 ```bash
 npm run check:ui-text

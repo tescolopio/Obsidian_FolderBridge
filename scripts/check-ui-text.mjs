@@ -1,9 +1,9 @@
 import fs from 'fs/promises';
 import path from 'path';
 import ts from 'typescript';
+import { fileURLToPath } from 'url';
 
-const repoRoot = path.resolve(path.dirname(new URL(
-    import.meta.url).pathname), '..');
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const scanTargets = [
     path.join(repoRoot, 'main.ts'),
     path.join(repoRoot, 'src'),

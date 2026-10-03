@@ -119,7 +119,7 @@ const context = await esbuild.context({
 	logLevel: "info",
 	sourcemap: prod ? false : 'inline',
 	treeShaking: true,
-	outfile: 'main.js',
+	outfile: process.env.FOLDERBRIDGE_BUILD_OUTFILE || 'main.js',
 });
 
 if (prod) {
