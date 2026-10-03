@@ -52,6 +52,8 @@ Fill in once per test machine or device and refer to it by its label.
 | 14 | Local/vault trash: restore file and folder, duplicate names, same/cross-volume recovery, failed system-trash fallback, root confirmation | #61 / #59 | | Not run | |
 | 15 | WebDAV/S3/SFTP: both trash modes refuse deletion; explicitly permanent deletion still works on disposable data | #61 | | Not run | |
 | 16 | Unsafe device override: warning, safe effective route, preserved stored settings, reload and TOC refresh | #63 / #70 | | Not run | |
+| 17 | Sanitized mount move: context action and explorer drag retain raw overrides after settings/managed-TOC reload, with safe routing | #73 / #74 | | Not run | |
+| 18 | Remote root trash: only cancel/unmount offered even with "Don't ask again"; cancel leaves confirmation preference unchanged; permanent-delete dialog remains available | #73 / #74 | | Not run | |
 
 Notes on specific rows:
 
@@ -73,6 +75,9 @@ Notes on specific rows:
   to their original source location. Pause external writers for cross-volume
   tests: copy-then-remove is not an atomic operation across filesystems.
   Verify fallback behavior in the real Obsidian host, not only adapter tests.
+- **Rows 17-18** require 2.15.5-rc.3 or later. Test ordinary mount moves separately
+  from explicit device-path changes. Existing saved deletion preferences are not
+  reset by the upgrade; record the initial preference and use only disposable data.
 
 ## Collecting A Console Stack
 

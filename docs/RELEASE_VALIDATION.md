@@ -1,12 +1,14 @@
 # Compatibility Release Validation
 
-## Safety Candidate: 2.15.5-rc.2
+## Safety Candidate: 2.15.5-rc.3
 
 The October 2-3 stabilization work is tracked in the
-[next release outline](NEXT_RELEASE.md). The maintainer approved an opt-in rc.2
-after its PR and merged-main CI pass; stable promotion remains unapproved. Use its exact
-revision, rather than older stable or prerelease assets, for the new trash and
-device-override checks in [the results sheet](NATIVE_TEST_RESULTS.md).
+[next release outline](NEXT_RELEASE.md). The maintainer approved an opt-in rc.3
+after CI-gated integration of the #73 review fixes through #74; stable promotion
+remains unapproved. #74 PR and merged-main CI pass all 561 tests. Local Windows
+validation reports 557 passes and the same four baseline path-expectation failures.
+Use the exact rc.3 revision, rather than older assets, for the trash,
+mount-move and device-override checks in [the results sheet](NATIVE_TEST_RESULTS.md).
 The historical evidence below remains scoped to the builds named there.
 
 ## Current Release And Evidence
