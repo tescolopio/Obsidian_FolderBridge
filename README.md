@@ -10,14 +10,16 @@ Extends Obsidian's single-root vault by letting you mount external folders as se
 
 The included 2.15.3 improvements cover mounted-file refresh and cached reads, Windows/WSL path handling, watcher suppression transitions, local startup metadata batching, explorer integration, device-specific paths, and managed TOC controls. See the [changelog](CHANGELOG.md) for the complete release history.
 
-**Prerelease for testing:** [2.15.5-rc.2](https://github.com/tescolopio/Obsidian_FolderBridge/releases/tag/2.15.5-rc.2) is the opt-in safety candidate, not a stable promotion. It adds recoverable local trash, refusal of unrecoverable remote trash requests, append safety and local path hardening, including the #69/#70 review fixes. It retains the rc.1 Android-loading and suppressed-startup fixes, which still need native confirmation. WebDAV remains unavailable on Android.
+**Prerelease for testing:** [2.15.5-rc.3](https://github.com/tescolopio/Obsidian_FolderBridge/releases/tag/2.15.5-rc.3) is the opt-in safety candidate, not a stable promotion. It fixes the #73 review findings: mount moves preserve raw stored device overrides, and remote-root trash dialogs no longer offer an unsupported deletion action that could save a future permanent-delete preference. It retains rc.2's recoverable local trash, remote-trash refusal, append safety and path hardening, plus the rc.1 Android-loading and suppressed-startup fixes. Native confirmation remains pending; WebDAV remains unavailable on Android.
 
 **Candidate limitations:** use a disposable vault and copied sources. Local
 trash uses a separate recovery folder per deletion. SFTP host-key verification,
 S3 prefix/copy fixes, the non-C whole-drive ancestor policy, dependency advisories
 and native validation remain unresolved. The [release outline](docs/NEXT_RELEASE.md)
-and [rc.2 notes](CHANGELOG.md#2155-rc2---2026-10-03) distinguish included changes
-from those remaining gates. Stable 2.15.4 remains latest.
+and [rc.3 notes](CHANGELOG.md#2155-rc3---2026-10-03) distinguish included changes
+from those remaining gates. Existing root-deletion preferences are preserved;
+review that setting if a failed rc.2 remote-trash attempt changed your choice.
+Stable 2.15.4 remains latest.
 
 **Validation limits (stable 2.15.4):** the release passed 400 automated tests across 13 files, plus lint, UI text checks, typechecking, and the production build. The full native Windows/WSL, macOS, Android, and current/oldest Obsidian host checks remain incomplete. Reporters confirmed two specific fixes on the earlier rc.2 build, not the complete 2.15.4 matrix. Automated tests do not establish native editor, Outline, metadata, or save compatibility. Back up your vault, settings, and mounted source folders; test writes on disposable copies. See the [release validation checklist](docs/RELEASE_VALIDATION.md).
 

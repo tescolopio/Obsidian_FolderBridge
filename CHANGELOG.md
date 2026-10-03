@@ -7,9 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.15.5-rc.3] - 2026-10-03
+
+This opt-in prerelease follows up on the two review findings from #73, fixed in
+#74. It retains the rc.2 safety work and does not promote a stable release.
+Stable 2.15.4 remains latest. Back up settings, the vault and mounted sources;
+test with a disposable vault and copied files.
+
 ### Fixed
 - Preserve raw device overrides during ordinary mount edits and moves, including sanitized runtime mounts and managed TOC mounts. Override replacement or clearing now requires an explicit update option.
 - Omit the unsupported trash action for remote mount roots, preventing a failed remote-trash attempt from saving "Don't ask again" for future permanent deletions. Unmount and explicit permanent deletion remain available.
+
+### Upgrade Notes
+- Existing saved root-deletion choices are preserved. If a failed remote-trash attempt in rc.2 saved an unintended deletion preference, review "Mount root deletion behavior" in settings and restore confirmation before further deletion tests.
+- Install `main.js`, `manifest.json` and `styles.css` from rc.3 together. Existing rc.2 tags and assets are not replaced.
+
+### Validation And Known Limitations
+- #74 PR and merged-main Ubuntu/Node 20 CI pass all 561 tests across 17 files, plus lint, UI text checks, TypeScript and production bundling. The local Windows full gate reports 557 passed and the same 4 pre-existing path-expectation failures. One pre-existing lint warning remains.
+- Automated coverage adds 15 regressions for sanitized moves, stored/managed-TOC override preservation, explicit replacement/clearing and remote root-trash choices. Automated tests mock Obsidian; no native host, Android, live backend or physical cross-volume result was added.
+- All [rc.2 limitations](#2155-rc2---2026-10-03) remain: native trash/restore/save compatibility is pending; cross-volume copy/remove is not atomic against external writers; remote recoverable trash is unsupported; permanent backend deletion limitations remain.
+- SFTP host-key trust (#60), S3 prefix/copy fixes (#57/#68), security policy (#71) and the whole-drive descendant-access policy are not included. Whole-drive mounts remain supported; path-access hardening is not complete.
+- Dependency audit remains at 2 high production affected-package entries in the braces/chokidar advisory chain, plus 3 moderate development entries. Dependencies and minimum host version are unchanged.
+- WebDAV remains unavailable on Android; S3/B2 mobile access and the suppressed-startup fix need native confirmation. BRAT/manual installation does not establish community-directory approval. Stable promotion still requires the [remaining release gates](docs/NEXT_RELEASE.md).
 
 ## [2.15.5-rc.2] - 2026-10-03
 

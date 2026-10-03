@@ -1,9 +1,9 @@
 # Next Release Outline
 
-Status: stabilization outline, started 2026-10-02. On October 3 the maintainer
-approved committing and pushing the safety work, preparing opt-in 2.15.5-rc.2,
-merging its PR after CI passes, and publishing from that validated merged
-revision. Stable promotion is not approved.
+Status: stabilization outline, started 2026-10-02. Opt-in 2.15.5-rc.2 was
+published on October 3 through #73. The maintainer then approved the review
+follow-up #74 and separate opt-in 2.15.5-rc.3 preparation and publication after
+CI passes. Stable promotion is not approved.
 
 ## Goal And Release Sequence
 
@@ -13,7 +13,7 @@ existing write, delete and native-host gates remain incomplete.
 
 1. Finish and review the stabilization branch.
 2. Run the combined automated gate and disclose the remaining blockers below.
-3. Prepare opt-in 2.15.5-rc.2 with matching bundle, manifest and styles after CI
+3. Prepare opt-in 2.15.5-rc.3 with matching bundle, manifest and styles after CI
    passes. Outstanding native, dependency and policy gates remain mandatory for
    stable promotion; their disclosure is not evidence that they are resolved.
 4. Collect native results on disposable sources and address failures.
@@ -26,9 +26,10 @@ behavior change when deciding versioning and upgrade communication.
 
 ## Integrated On This Branch
 
-Branch: `stabilization/next-release-safety`, based on GitHub main at `61aeffd`.
-The safety changes were committed as `f3a2cbf` for the approved rc.2 preparation PR.
-The original integration and feedback passes did not merge upstream PRs.
+Release branch: `release/2.15.5-rc.3`, based on validated main at `152c490`
+(merged #74). The original `stabilization/next-release-safety` work at `f3a2cbf`
+shipped through #73; the two review follow-ups at `ed5bfac` shipped through #74.
+The original #59/#69/#70 PRs were integrated without merging their individual PRs.
 
 | Item | Source | Included behavior |
 | --- | --- | --- |
@@ -41,11 +42,15 @@ The original integration and feedback passes did not merge upstream PRs.
 | Remote trash guard | Maintainer-approved change in this session | WebDAV/S3/SFTP trash requests throw without deleting; explicit permanent-delete operations are unchanged. |
 | Accurate deletion UX | This branch | Root confirmation distinguishes recoverable trash from permanent deletion. Existing saved root-deletion choices retain their identifiers and follow the requested deletion mode. |
 | Safe local validation | This branch | Windows-portable lint/UI paths and optional redirected bundle output. Installed `main.js` is not replaced by the validation run. |
+| Post-#73 review fixes | Merged #74 | Ordinary edits/moves preserve raw overrides; replacement is explicit. Remote root-trash dialogs offer only cancel/unmount, not a deletion choice that could save a future permanent-delete preference. |
 
 ## Upgrade And Recovery Notes
 
-- Stable remains 2.15.4; opt-in 2.15.5-rc.2 adds the later append, traversal,
-  override and trash work absent from 2.15.5-rc.1.
+- Stable remains 2.15.4; opt-in 2.15.5-rc.3 adds the #73 review fixes on top of
+  rc.2's append, traversal, override and trash work.
+- Existing root-deletion preferences are preserved. Review that setting and
+  restore confirmation if a failed rc.2 remote-trash attempt saved an unintended
+  deletion preference. Upgrade does not silently reset legitimate saved choices.
 - Back up the vault, plugin settings and mounted sources before any candidate
   test. Use copied source data, never valuable files for failure injection.
 - Local and vault-mounted trash entries are now located at
@@ -115,6 +120,11 @@ active vault. Obsidian and remote behavior are mocked unless stated otherwise.
 
 - Lint passes with one pre-existing sentence-case warning.
 - UI text checks, TypeScript checking and production bundling pass.
+- Rc.3 follow-up: 557 passed, 4 failed, 561 total on Windows. #74 PR and
+  merged-main Ubuntu/Node 20 CI pass all 561 tests across 17 files. The 15 new
+  regressions cover sanitized mount moves, raw settings/TOC preservation,
+  explicit override replacement/clearing and remote root-trash choices; 33
+  focused feedback/compatibility tests pass.
 - Final rc.2 full run on October 3: 542 passed, 4 failed, 546 total across 17 test files.
   Focused changed-behavior runs: 238 passed across the trash, protected-path
   and deletion-dialog files, plus 12 device-override tests passed.
@@ -159,7 +169,7 @@ Use [release validation](RELEASE_VALIDATION.md) and record runs in
    in-app discovery/install. GitHub release availability is not directory
    approval; if still blocked, state BRAT/manual installation limits explicitly.
 8. Review matching version/tag metadata, release notes and all three packaged
-   assets for the approved rc.2 publication. Stable publication still requires
+   assets for the approved rc.3 publication. Stable publication still requires
    a separate approval after the outstanding gates are completed.
 
 ## Deferred From This Release
@@ -176,7 +186,7 @@ Use [release validation](RELEASE_VALIDATION.md) and record runs in
 
 ## Next Working Session
 
-After the approved opt-in rc.2, resolve SFTP trust and S3 correctness with their
+After the approved opt-in rc.3, resolve SFTP trust and S3 correctness with their
 migration/UX decisions and combined tests. Address the dependency, Windows and
 native validation gates before stable promotion. No stable publication is
 recommended from the current branch state.
