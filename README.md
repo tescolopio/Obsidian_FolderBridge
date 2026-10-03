@@ -25,6 +25,17 @@ Stable 2.15.4 remains latest.
 
 ## Full Feature List
 
+**Unreleased SFTP development:** the working branch requires explicit host-key
+fingerprint approval before authentication; rc.3 does not include this behavior.
+Existing unpinned mounts will require approval after upgrading to a build that
+includes it. Compare the displayed fingerprint with the server administrator
+over a trusted channel. Changed keys are refused; forgetting a saved key is an
+explicit edit saved in mount settings, not an automatic recovery action.
+Key discovery uses a bounded connection without authentication. That connection
+closes before approval, so comparing fingerprints is not limited by the SSH
+handshake deadline. Authentication uses a fresh, bounded connection that must
+present the same approved key; it cannot open another approval prompt.
+
 ### Core
 
 - **Zero duplication** — files are always read and written from their real locations on disk or on the remote backend

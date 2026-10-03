@@ -48,6 +48,7 @@ interface SFTPClientInstance {
     exists(path: string): Promise<false | string>;
     end(): Promise<void>;
     sftp?: unknown;
+    client?: { destroy(): void };
 }
 
 /** Options accepted by SFTPClientInstance.connect(). */
@@ -58,7 +59,18 @@ interface SFTPConnectOptions {
     password?: string;
     privateKey?: Buffer;
     passphrase?: string;
+    hostVerifier: (hostKey: Buffer, verify: (accepted: boolean) => void) => void;
+    retries: number;
+    readyTimeout: number;
 }
+
+export function formatHostKeyFingerprint(hostKey: Buffer): string {
+    const crypto = loadOptionalNodeModule<typeof import('crypto')>('crypto');
+    if (!crypto) throw new Error('SFTP host-key verification requires crypto.');
+    return `SHA256:${crypto.createHash('sha256').update(hostKey).digest('base64').replace(/=+$/, '')}`;
+}
+
+export type SFTPHostKeyVerifier = (fingerprint: string, signal: AbortSignal, allowApproval: boolean) => Promise<void>;
 
 function loadSFTPClient(): new () => SFTPClientInstance {
     const sftpClient = loadOptionalNodeModule<new () => SFTPClientInstance>('ssh2-sftp-client');
@@ -88,6 +100,10 @@ export class SFTPAdapter {
     private password?: string;
     private privateKeyPath?: string;
     private passphrase?: string;
+    private verifyHostKey?: SFTPHostKeyVerifier;
+    private connectionRevision = 0;
+    private verificationController?: AbortController;
+    private readyTimeout: number;
 
     // The sftp client instance; recreated on connect
     private sftp: SFTPClientInstance | null = null;
@@ -102,6 +118,8 @@ export class SFTPAdapter {
             password?: string;
             privateKeyPath?: string;
             passphrase?: string;
+            verifyHostKey?: SFTPHostKeyVerifier;
+            readyTimeout?: number;
         }
     ) {
         this.host = host;
@@ -110,6 +128,8 @@ export class SFTPAdapter {
         this.password = options.password;
         this.privateKeyPath = options.privateKeyPath;
         this.passphrase = options.passphrase;
+        this.verifyHostKey = options.verifyHostKey;
+        this.readyTimeout = options.readyTimeout ?? 20000;
     }
 
     // ------------------------------------------------------------------
@@ -121,7 +141,7 @@ export class SFTPAdapter {
      * transient fields, sessionStorage, or encrypted blobs (in that order).
      * Returns null if required fields are missing.
      */
-    static fromMount(mount: MountPoint): SFTPAdapter | null {
+    static fromMount(mount: MountPoint, verifyHostKey?: SFTPHostKeyVerifier): SFTPAdapter | null {
         if (!mount.sftpHost || !mount.sftpUsername) return null;
 
         const password =
@@ -144,6 +164,7 @@ export class SFTPAdapter {
                 password,
                 privateKeyPath: mount.sftpPrivateKeyPath ?? undefined,
                 passphrase,
+                verifyHostKey,
             }
         );
     }
@@ -165,35 +186,126 @@ export class SFTPAdapter {
         return this.connectingPromise;
     }
 
-    private async _doConnect(): Promise<void> {
-        const SFTPClient = loadSFTPClient();
-        const client = new SFTPClient();
-
-        const connectOptions: SFTPConnectOptions = {
-            host: this.host,
-            port: this.port,
-            username: this.username,
-        };
-
-        if (this.privateKeyPath) {
-            const fs = loadOptionalNodeModule<typeof import('fs')>('fs');
-            if (!fs) throw new Error('fs is unavailable in this environment');
-            connectOptions.privateKey = fs.readFileSync(this.privateKeyPath);
-            if (this.passphrase) connectOptions.passphrase = this.passphrase;
-        } else if (this.password) {
-            connectOptions.password = this.password;
+    private async connectClient(client: SFTPClientInstance, options: SFTPConnectOptions, signal: AbortSignal): Promise<void> {
+        if (signal.aborted) throw new Error('SFTP connection was cancelled.');
+        const abort = () => client.client?.destroy();
+        signal.addEventListener('abort', abort, { once: true });
+        try {
+            await client.connect(options);
+        } finally {
+            signal.removeEventListener('abort', abort);
         }
+    }
 
-        await client.connect(connectOptions);
-        this.sftp = client;
+    private async closeClient(client: SFTPClientInstance): Promise<void> {
+        try {
+            await client.end();
+        } catch (error) {
+            logger.warn('SFTP connection cleanup failed.', error);
+        }
+    }
+
+    private async probeHostKey(Client: new () => SFTPClientInstance, signal: AbortSignal): Promise<string> {
+        const probe = new Client();
+        let fingerprint: string | undefined;
+        let fingerprintError: Error | undefined;
+        try {
+            // Reject key exchange before authentication; approval happens after this socket closes.
+            await this.connectClient(probe, {
+                host: this.host,
+                port: this.port,
+                username: this.username,
+                retries: 0,
+                readyTimeout: this.readyTimeout,
+                hostVerifier: (hostKey, verify) => {
+                    try {
+                        fingerprint = formatHostKeyFingerprint(hostKey);
+                    } catch (error) {
+                        fingerprintError = error instanceof Error ? error : new Error(String(error));
+                    }
+                    verify(false);
+                },
+            }, signal);
+        } catch (error) {
+            if (signal.aborted) throw new Error('SFTP connection was cancelled.');
+            if (fingerprintError) throw fingerprintError;
+            if (!fingerprint) throw error;
+            return fingerprint;
+        } finally {
+            await this.closeClient(probe);
+            probe.client?.destroy();
+        }
+        throw new Error('SFTP host-key probe unexpectedly authenticated.');
+    }
+
+    private async _doConnect(): Promise<void> {
+        const revision = this.connectionRevision;
+        const controller = new AbortController();
+        this.verificationController = controller;
+        let client: SFTPClientInstance | undefined;
+        try {
+            const verifyHostKey = this.verifyHostKey;
+            if (!verifyHostKey) throw new Error('SFTP host key has not been approved. Connect through the mount settings to establish trust.');
+            const Client = loadSFTPClient();
+            const fingerprint = await this.probeHostKey(Client, controller.signal);
+            await verifyHostKey(fingerprint, controller.signal, true);
+            if (controller.signal.aborted || revision !== this.connectionRevision) throw new Error('SFTP connection was cancelled.');
+
+            client = new Client();
+            let verificationError: unknown;
+            const options: SFTPConnectOptions = {
+                host: this.host,
+                port: this.port,
+                username: this.username,
+                retries: 0,
+                readyTimeout: this.readyTimeout,
+                hostVerifier: (hostKey, verify) => {
+                    void (async () => {
+                        const presented = formatHostKeyFingerprint(hostKey);
+                        if (presented !== fingerprint) {
+                            throw new Error(`SFTP host key changed between discovery and authentication. Expected ${fingerprint}; received ${presented}. Connection refused.`);
+                        }
+                        await verifyHostKey(presented, controller.signal, false);
+                        if (controller.signal.aborted || revision !== this.connectionRevision) throw new Error('SFTP connection was cancelled.');
+                    })().then(() => verify(true), error => {
+                        verificationError = error;
+                        verify(false);
+                    });
+                },
+            };
+            if (this.privateKeyPath) {
+                const fs = loadOptionalNodeModule<typeof import('fs')>('fs');
+                if (!fs) throw new Error('fs is unavailable in this environment');
+                options.privateKey = fs.readFileSync(this.privateKeyPath);
+                if (this.passphrase) options.passphrase = this.passphrase;
+            } else if (this.password) {
+                options.password = this.password;
+            }
+
+            try {
+                await this.connectClient(client, options, controller.signal);
+            } catch (error) {
+                throw verificationError ?? error;
+            }
+            if (controller.signal.aborted || revision !== this.connectionRevision) throw new Error('SFTP connection was cancelled.');
+            this.sftp = client;
+        } catch (error) {
+            controller.abort();
+            if (client) await this.closeClient(client);
+            throw error;
+        } finally {
+            if (this.verificationController === controller) this.verificationController = undefined;
+        }
     }
 
     private isSFTPReady(): boolean {
-        return this.sftp?.sftp != null || typeof this.sftp?.list === 'function';
+        return this.sftp?.sftp != null;
     }
 
     /** Close the SFTP connection. Called on unmount. */
     async disconnect(): Promise<void> {
+        this.connectionRevision++;
+        this.verificationController?.abort();
         if (this.sftp) {
             try {
                 await this.sftp.end();

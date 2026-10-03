@@ -211,6 +211,7 @@ export class MountManagerModal extends Modal {
 	private sftpPassword = '';
 	private sftpPrivateKeyPath = '';
 	private sftpPassphrase = '';
+	private forgetSftpHostKey = false;
 	// Advanced (per-mount watcher + performance)
 	private watcherDebounceMs: number | undefined = undefined;
 	private watcherUsePolling = false;
@@ -705,6 +706,23 @@ export class MountManagerModal extends Modal {
 					.onChange(val => { this.sftpPassphrase = val; });
 			});
 
+		const fingerprint = this.editMount?.sftpHostKeyFingerprint;
+		const hostKeySetting = new Setting(sftpSection)
+			.setName('Server host key')
+			.setDesc(fingerprint
+				? `Approved key: ${fingerprint}. A different server key is refused.`
+				: 'The first connection requires fingerprint approval before authentication. Verify it with the server administrator.');
+		if (fingerprint) {
+			hostKeySetting.addButton(button => button
+				.setButtonText('Forget host key on save')
+				.setClass('mod-warning')
+				.onClick(() => {
+					this.forgetSftpHostKey = true;
+					button.setDisabled(true);
+					hostKeySetting.setDesc('Saving clears the approved key. The next connection requires approval again. Verify any server key change independently.');
+				}));
+		}
+
 		// Apply initial visibility
 		toggleSections(this.mountType);
 
@@ -1173,6 +1191,7 @@ export class MountManagerModal extends Modal {
 					sftpPassword: this.sftpPassword || undefined,
 					sftpPrivateKeyPath: this.sftpPrivateKeyPath || undefined,
 					sftpPassphrase: this.sftpPassphrase || undefined,
+					...(this.forgetSftpHostKey ? { sftpForgetHostKey: true } : {}),
 					visibleFileFilter: this.visibleFileFilter !== 'all' ? this.visibleFileFilter : undefined,
 					maxFiles: this.maxFiles,
 				},

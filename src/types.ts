@@ -118,6 +118,10 @@ export interface MountPoint {
 	encryptedSftpPassphrase?: string;
 	/** TRANSIENT — carries the raw passphrase from the modal. Never persisted. */
 	sftpPassphrase?: string;
+	/** Approved SHA-256 server host-key fingerprint, bound to sftpHost/sftpPort. */
+	sftpHostKeyFingerprint?: string;
+	/** TRANSIENT - explicit trust reset requested by the edit dialog. Never persisted. */
+	sftpForgetHostKey?: boolean;
 	/** Runtime-only source path when this mount is generated from a TOC config file. */
 	tocSourcePath?: string;
 }

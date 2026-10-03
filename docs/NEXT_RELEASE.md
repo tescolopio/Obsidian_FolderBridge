@@ -79,9 +79,44 @@ The original #59/#69/#70 PRs were integrated without merging their individual PR
 
 ## Remaining Engineering Gates
 
+SFTP development now uses explicit fingerprint approval before authentication,
+rather than #60's silent first-use pinning, as chosen by the maintainer.
+This is unpublished work on `stabilization/sftp-host-trust`, not part of rc.3.
+Unit tests cover approval, persistence failures, changed keys, reconnects,
+concurrent requests and stale endpoint/reset approvals. Disposable loopback SSH
+handshakes exercise the real installed client and prove password authentication
+waits for approval and is absent after key refusal. Credential-free discovery
+closes before approval; a fresh bounded connection verifies the same key and
+saved trust without opening another prompt. A real-client regression waits
+21 seconds for approval (beyond the original 20-second deadline), then connects
+successfully. Additional regressions cover cancellation/retry, bounded discovery
+and authentication timeouts with recovery, and a key changed between phases.
+Native Obsidian and a real
+administrator-managed SSH endpoint still need validation before claiming #60
+complete. No release or issue closure is authorized by this development step.
+Cancelled approval pauses prompting until Reconnect. Host-key approval is a
+separate decision from successful credential authentication; an approved key
+remains saved even if the subsequent password/key authentication fails.
+Imported/synced saved fingerprints are trust configuration, not proof of an
+independently verified server. Review them before use.
+Final Windows validation for this development step: lint (one existing warning),
+UI text checks, TypeScript and redirected production bundling pass; 592 tests
+pass and the same four baseline path-expectation tests fail, 596 total across
+19 files. All 35 added SFTP tests pass, including seven real loopback handshakes.
+This is local evidence, not a new CI or native Obsidian result.
+
+Validation commands for the timeout feedback:
+- `npm test -- tests\SFTPAdapter.test.ts tests\SFTPHostKeyHandshake.test.ts tests\mainFallback.test.ts -t 'SFTP host-key|real loopback SSH'`: passed, 35 tests.
+- `npm run lint`: passed, one existing UI sentence-case warning.
+- `npm run check:ui-text`: passed.
+- `npm run build` with `FOLDERBRIDGE_BUILD_OUTFILE` set outside the active vault:
+  passed, including TypeScript; installed plugin bundle untouched.
+- `npm test`: 592 passed / 4 failed; only the previously reproduced Windows
+  path-separator expectations fail.
+
 | Priority | Work | Required outcome before claiming it is fixed |
 | --- | --- | --- |
-| Highest | SFTP host-key trust, #60 / #63 | Review persistence and reconnect paths, initial trust UX, changed-key refusal, host/port edits and deliberate reset. Run against a disposable SSH server. Current branch still lacks this PR. |
+| Highest | SFTP host-key trust, #60 / #63 | Review the unpublished explicit-approval implementation and validate the native prompt, restart persistence, changed-key refusal, host/port edits and deliberate reset against a disposable administrator-managed SSH server. Current rc.3 assets do not contain this work. |
 | High | S3 prefix correction, #57 / #62 | Validate every caller's server-path contract, then test root/non-root prefixes on a live compatible bucket. Document that old doubled-prefix objects remain in the bucket and must be migrated explicitly; no automatic move or delete. |
 | High | S3 CopySource encoding, #68 | Integrate with #57, test spaces, punctuation and Unicode in rename/copy against a live bucket. |
 | High | Runtime dependency advisory | Current production audit reports 2 high affected-package entries, `braces` and `chokidar`, from the same braces advisory chain. Resolve or document a reviewed mitigation; do not use `npm audit fix --force` blindly. Watcher dependency upgrades require API, glob and Electron compatibility review. |

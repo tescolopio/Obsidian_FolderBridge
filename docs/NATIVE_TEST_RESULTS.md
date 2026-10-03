@@ -54,6 +54,7 @@ Fill in once per test machine or device and refer to it by its label.
 | 16 | Unsafe device override: warning, safe effective route, preserved stored settings, reload and TOC refresh | #63 / #70 | | Not run | |
 | 17 | Sanitized mount move: context action and explorer drag retain raw overrides after settings/managed-TOC reload, with safe routing | #73 / #74 | | Not run | |
 | 18 | Remote root trash: only cancel/unmount offered even with "Don't ask again"; cancel leaves confirmation preference unchanged; permanent-delete dialog remains available | #73 / #74 | | Not run | |
+| 19 | Unreleased SFTP trust: independently compare first fingerprint; wait more than 20 seconds before approval; approve/cancel and reconnect; restart, changed-key refusal, host/port edits and explicit reset | #60 / #63 | | Not run | |
 
 Notes on specific rows:
 

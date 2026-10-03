@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- SFTP connections require approval of the server's OpenSSH-style SHA-256 fingerprint before authentication, including existing mounts without a saved key. Approval must be saved successfully; later changed keys are refused rather than silently replaced.
+- SFTP trust is bound to the mount's host and port. Endpoint changes, transport changes and an explicit "Forget host key on save" reset require approval again. Ordinary edits retain trust. Verify new or changed keys independently with the server administrator.
+- Cancelled approval pauses further prompts until Reconnect. Concurrent connections share approval; stale/cancelled connection approvals cannot authorize authentication. Background probes close their temporary connections.
+- Close a credential-free key-discovery connection before asking for approval, keeping human verification outside the SSH handshake timeout. A fresh bounded connection must present that same approved key before authentication; changed keys or revoked/pending trust refuse the connection without another prompt.
+
 ## [2.15.5-rc.3] - 2026-10-03
 
 This opt-in prerelease follows up on the two review findings from #73, fixed in
