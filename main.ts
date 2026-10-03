@@ -1687,7 +1687,7 @@ export default class FolderBridgePlugin extends Plugin {
 							} else {
 								resolve(result);
 							}
-						}, trash);
+						}, trash, !this.isCloudMount(mount));
 						modal.open();
 					});
 				}
@@ -2204,12 +2204,12 @@ export default class FolderBridgePlugin extends Plugin {
 		await this.updateMount(id, {
 			...mount,
 			deviceOverrides: { ...mount.deviceOverrides, [this.settings.deviceId]: overridePath },
-		});
+		}, { replaceDeviceOverrides: true });
 	}
 
-	async updateMount(id: string, newData: Omit<MountPoint, 'id'>): Promise<void> {
+	async updateMount(id: string, newData: Omit<MountPoint, 'id'>, options: { replaceDeviceOverrides?: boolean } = {}): Promise<void> {
 		const previous = this.mountUpdates.get(id) ?? Promise.resolve();
-		const update = previous.catch(() => { }).then(() => this.updateMountState(id, newData));
+		const update = previous.catch(() => { }).then(() => this.updateMountState(id, newData, options.replaceDeviceOverrides === true));
 		this.mountUpdates.set(id, update);
 		try {
 			await update;
@@ -2218,15 +2218,26 @@ export default class FolderBridgePlugin extends Plugin {
 		}
 	}
 
-	private async updateMountState(id: string, newData: Omit<MountPoint, 'id'>): Promise<void> {
+	private async updateMountState(id: string, newData: Omit<MountPoint, 'id'>, replaceDeviceOverrides: boolean): Promise<void> {
 		const idx = this.persistedMountPoints.findIndex(m => m.id === id);
+		const storedMount = idx === -1
+			? this.managedTocMountPoints.find(mount => mount.id === id)
+			: this.persistedMountPoints[idx];
+		if (!storedMount) return;
+
+		// Ordinary edits can originate from a sanitized runtime mount, not its raw override map.
+		newData = {
+			...newData,
+			deviceOverrides: replaceDeviceOverrides ? newData.deviceOverrides : storedMount.deviceOverrides,
+		};
+		const validationData = replaceDeviceOverrides ? newData : { ...newData, deviceOverrides: undefined };
 		if (idx === -1) {
 			const managedIndex = this.getManagedTocIndex(id);
 			if (managedIndex === -1) return;
 
 			const oldMount = this.managedTocMountPoints[managedIndex];
 			const otherMounts = this.settings.mountPoints.filter(m => m.id !== id);
-			const error = this.security.validateMount(newData, otherMounts);
+			const error = this.security.validateMount(validationData, otherMounts);
 			if (error) {
 				new Notice(`Folder Bridge: ${error}`);
 				return;
@@ -2290,7 +2301,7 @@ export default class FolderBridgePlugin extends Plugin {
 
 		// Validate against all OTHER mounts (exclude the one being edited)
 		const otherMounts = this.settings.mountPoints.filter(m => m.id !== id);
-		const error = this.security.validateMount(newData, otherMounts);
+		const error = this.security.validateMount(validationData, otherMounts);
 		if (error) {
 			new Notice(`Folder Bridge: ${error}`);
 			return;

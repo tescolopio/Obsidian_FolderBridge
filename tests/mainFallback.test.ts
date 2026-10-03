@@ -12,6 +12,7 @@ import { DEFAULT_SETTINGS, MountPoint } from '../src/types';
 import { serializeTocConfig } from '../src/TocConfig';
 import { checkPathAccessible } from '../src/OSHelpers';
 import { browseFolderOnDisk } from '../src/ui/MountManagerModal';
+import { MountRootDeleteModal } from '../src/ui/MountRootDeleteModal';
 import { replayMountContentsToVault } from '../src/mountScan';
 import { promises as fs } from 'fs';
 import { readFileSync } from 'node:fs';
@@ -25,6 +26,11 @@ vi.mock('obsidian', async importOriginal => {
         ...original,
         Notice: class extends original.Notice {
             setMessage = vi.fn();
+        },
+        Modal: class extends original.Modal {
+            open() {}
+            close() { this.onClose(); }
+            onClose() {}
         },
         FuzzySuggestModal: class extends original.FuzzySuggestModal<MountPoint> {
             setPlaceholder() { return this; }
@@ -743,7 +749,7 @@ describe('main fallback regressions', () => {
                 starts.push(plugin.pathMapper.getEffectiveRealPath(active));
             }
         } as unknown as FileWatcher;
-        await plugin.updateMount(existing.id, { ...existing, deviceOverrides });
+        await plugin.updateMount(existing.id, { ...existing, deviceOverrides }, { replaceDeviceOverrides: true });
         expect(events.slice(0, 2)).toEqual(['file-removed:docs/old.md', 'folder-removed:docs']);
         expect(starts).toEqual([deviceOverrides?.desktop ?? '/primary']);
     });
@@ -1133,14 +1139,92 @@ describe('unsafe device overrides', () => {
             expect(active).toBe(plugin.settings.mountPoints[0]);
         });
         plugin.fileWatcher = { stopWatching: vi.fn(), startWatching } as unknown as FileWatcher;
+        const effective = plugin.settings.mountPoints[0];
+        expect(effective.deviceOverrides).toEqual({});
         const newData = lifecycle === 'reinject'
-            ? { ...existing, virtualPath: 'renamed' }
-            : { ...existing, watcherDebounceMs: 250 };
+            ? { ...effective, virtualPath: 'renamed' }
+            : { ...effective, watcherDebounceMs: 250 };
 
         await plugin.updateMount(existing.id, newData);
 
         expect(startWatching).toHaveBeenCalledOnce();
         expect(persistedOverrides(plugin)).toEqual({ desktop: '/etc' });
+    });
+
+    it.each(['update', 'adapter rename'] as const)('preserves raw overrides during a sanitized mount move via %s', async route => {
+        const overrides = { desktop: '/etc', laptop: '/other-notes' };
+        const { plugin, saveData } = await makePlugin([{ ...mount('docs'), deviceOverrides: overrides }]);
+        vi.mocked(plugin.security.validateMount).mockRestore();
+        const effective = plugin.settings.mountPoints[0];
+        expect(effective.deviceOverrides).toEqual({ laptop: '/other-notes' });
+
+        if (route === 'adapter rename') {
+            (plugin as unknown as { installVirtualAdapter(): void }).installVirtualAdapter();
+            await plugin.virtualAdapter!.rename('docs', 'Moved/docs');
+        } else {
+            await plugin.updateMount(effective.id, { ...effective, virtualPath: 'Moved/docs' });
+        }
+
+        expect(persistedOverrides(plugin)).toEqual(overrides);
+        expect(saveData).toHaveBeenLastCalledWith(expect.objectContaining({
+            mountPoints: [expect.objectContaining({ virtualPath: 'Moved/docs', deviceOverrides: overrides })],
+        }));
+        expect(plugin.pathMapper.getEffectiveRealPath(plugin.settings.mountPoints[0])).toBe('/primary');
+        expect(plugin.settings.mountPoints[0].deviceOverrides).toEqual({ laptop: '/other-notes' });
+    });
+
+    it('preserves raw overrides when moving a sanitized managed-TOC mount', async () => {
+        const overrides = { desktop: '/etc', laptop: '/other-notes' };
+        let document = serializeTocConfig([{ ...mount('docs'), deviceOverrides: overrides }]);
+        vi.mocked(fs.readFile).mockImplementation(() => Promise.resolve(document));
+        vi.mocked(fs.writeFile).mockImplementation((_source, text) => {
+            document = String(text);
+            return Promise.resolve();
+        });
+        const { plugin } = await makePlugin([], '/managed.json');
+        const effective = plugin.settings.mountPoints[0];
+        expect(effective.deviceOverrides).toEqual({ laptop: '/other-notes' });
+
+        await plugin.updateMount(effective.id, { ...effective, virtualPath: 'Moved/docs' });
+
+        expect(JSON.parse(document).mounts).toEqual([expect.objectContaining({
+            virtualPath: 'Moved/docs', deviceOverrides: overrides,
+        })]);
+        expect(plugin.settings.mountPoints[0].virtualPath).toBe('Moved/docs');
+        expect(plugin.pathMapper.getEffectiveRealPath(plugin.settings.mountPoints[0])).toBe('/primary');
+        await plugin.unbindManagedTocSource();
+        expect(persistedOverrides(plugin)).toEqual(overrides);
+    });
+
+    it.each<MountPoint['deviceOverrides']>([{ desktop: '/new-root' }, {}, undefined])('explicitly replaces or clears managed-TOC overrides with %j', async deviceOverrides => {
+        let document = serializeTocConfig([{ ...mount('docs'), deviceOverrides: { desktop: '/old-root' } }]);
+        vi.mocked(fs.readFile).mockImplementation(() => Promise.resolve(document));
+        vi.mocked(fs.writeFile).mockImplementation((_source, text) => {
+            document = String(text);
+            return Promise.resolve();
+        });
+        const { plugin } = await makePlugin([], '/managed.json');
+        const effective = plugin.settings.mountPoints[0];
+
+        await plugin.updateMount(effective.id, { ...effective, deviceOverrides }, { replaceDeviceOverrides: true });
+
+        expect(JSON.parse(document).mounts[0].deviceOverrides).toEqual(deviceOverrides);
+        expect(plugin.pathMapper.getEffectiveRealPath(plugin.settings.mountPoints[0])).toBe(deviceOverrides?.desktop ?? '/primary');
+    });
+
+    it('validates explicit override changes and preserves other devices when replacing an unsafe active override', async () => {
+        const { plugin } = await makePlugin([{
+            ...mount('docs'), deviceOverrides: { desktop: '/etc', laptop: '/other-notes' },
+        }]);
+        vi.mocked(plugin.security.validateMount).mockRestore();
+
+        await plugin.setDeviceOverride('docs', '/usr');
+        expect(persistedOverrides(plugin)).toEqual({ desktop: '/etc', laptop: '/other-notes' });
+        expect(plugin.pathMapper.getEffectiveRealPath(plugin.settings.mountPoints[0])).toBe('/primary');
+
+        await plugin.setDeviceOverride('docs', '/new-root');
+        expect(persistedOverrides(plugin)).toEqual({ desktop: '/new-root', laptop: '/other-notes' });
+        expect(plugin.pathMapper.getEffectiveRealPath(plugin.settings.mountPoints[0])).toBe('/new-root');
     });
 
     it('sanitizes a raw mount passed directly to the injection boundary', async () => {
@@ -1156,5 +1240,32 @@ describe('unsafe device overrides', () => {
 
         expect(starts).toEqual(['/primary']);
         expect(existing.deviceOverrides).toEqual({ desktop: '/etc' });
+    });
+
+    describe('remote mount-root trash confirmation', () => {
+        afterEach(() => vi.restoreAllMocks());
+
+        it.each(['webdav', 's3', 'sftp'] as const)('does not offer %s root trash or persist a deletion preference', async mountType => {
+            const { plugin, saveData } = await makePlugin([{ ...mount('docs'), mountType }]);
+            plugin.settings.mountRootDeletionBehavior = 'ask';
+            (plugin as unknown as { installVirtualAdapter(): void }).installVirtualAdapter();
+            saveData.mockClear();
+            const open = vi.spyOn(MountRootDeleteModal.prototype, 'open').mockImplementation(function () {
+                Object.assign(this, { contentEl: new SettingsElement() });
+                this.onOpen();
+                const content = this.contentEl as unknown as SettingsElement;
+                const buttons = content.descendants().filter(element => element.tag === 'button');
+                expect(buttons.map(button => button.text)).toEqual(['Cancel', 'Unmount only']);
+                buttons.find(button => button.text === 'Cancel')!.onclick!();
+            });
+
+            await expect(plugin.virtualAdapter!.trashSystem('docs')).rejects.toThrow('Deletion cancelled');
+            await expect(plugin.virtualAdapter!.trashLocal('docs')).rejects.toThrow('Deletion cancelled');
+
+            expect(open).toHaveBeenCalledTimes(2);
+            expect(plugin.settings.mountRootDeletionBehavior).toBe('ask');
+            expect(saveData).not.toHaveBeenCalled();
+            expect(plugin.settings.mountPoints).toHaveLength(1);
+        });
     });
 });
