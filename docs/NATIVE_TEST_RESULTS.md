@@ -55,6 +55,7 @@ Fill in once per test machine or device and refer to it by its label.
 | 17 | Sanitized mount move: context action and explorer drag retain raw overrides after settings/managed-TOC reload, with safe routing | #73 / #74 | | Not run | |
 | 18 | Remote root trash: only cancel/unmount offered even with "Don't ask again"; cancel leaves confirmation preference unchanged; permanent-delete dialog remains available | #73 / #74 | | Not run | |
 | 19 | rc.4 SFTP trust: independently compare first fingerprint; wait at least 30 seconds before approval; approve/cancel and reconnect; restart, changed-key refusal, host/port edits and explicit reset | #60 / #63 | | Not run | |
+| 20 | Local rc.5 S3: root/non-root prefixes, provider-confirmed exact keys, copy/rename source encoding, paginated folder copy and retained legacy doubled-prefix objects | #57 / #68 / #62 | | Not run | |
 
 Notes on specific rows:
 

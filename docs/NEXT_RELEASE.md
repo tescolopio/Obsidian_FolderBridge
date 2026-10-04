@@ -110,6 +110,28 @@ pass and the same four baseline path-expectation tests fail, 596 total across
 19 files. All 35 added SFTP tests pass, including seven real loopback handshakes.
 This is local evidence, not a new CI or native Obsidian result.
 
+### Cumulative Local Windows Candidate
+
+Published rc.4 was delivered through #76, with PR, merged-main and release CI
+passing 596/596 tests. Contributor testing/review was requested on #60 and #63;
+native results remain pending.
+
+The maintainer then approved combined S3 #57/#68 development and local
+installation, not another publication. The unpublished local **2.15.5-rc.5**
+candidate on `stabilization/s3-prefix-copy` includes all rc.4 fixes plus
+single-prefix S3 routing and encoded CopySource for file/paginated folder copies.
+Twenty-three S3 regressions exercise actual VirtualAdapter routing and exact SDK
+inputs, device overrides, append failures and copy-before-delete behavior.
+Local lint/UI/types/build pass; final full tests report **615 passed / four
+unchanged Windows baseline failures, 619 total across 20 files**.
+No live S3 provider or native Obsidian result is implied.
+
+Existing doubled-prefix objects are not automatically moved or deleted.
+Use the [Windows cumulative test checklist](WINDOWS_TEST_CHECKLIST.md), review
+the migration warning before writes, and record native results against the
+actual installed bundle hash. The local plugin's runtime files and settings
+were backed up before installation; settings are preserved.
+
 Validation commands for the timeout feedback:
 - `npm test -- tests\SFTPAdapter.test.ts tests\SFTPHostKeyHandshake.test.ts tests\mainFallback.test.ts -t 'SFTP host-key|real loopback SSH'`: passed, 35 tests.
 - `npm run lint`: passed, one existing UI sentence-case warning.
@@ -121,9 +143,8 @@ Validation commands for the timeout feedback:
 
 | Priority | Work | Required outcome before claiming it is fixed |
 | --- | --- | --- |
-| Highest | SFTP host-key trust, #60 / #63 | Publish the CI-validated rc.4 test candidate and request contributor review/testing of the native prompt, delayed approval, restart persistence, changed-key refusal, host/port edits and deliberate reset against a disposable administrator-managed SSH server. Earlier rc.3 assets do not contain this work; original reports remain open pending review. |
-| High | S3 prefix correction, #57 / #62 | Validate every caller's server-path contract, then test root/non-root prefixes on a live compatible bucket. Document that old doubled-prefix objects remain in the bucket and must be migrated explicitly; no automatic move or delete. |
-| High | S3 CopySource encoding, #68 | Integrate with #57, test spaces, punctuation and Unicode in rename/copy against a live bucket. |
+| Highest | SFTP host-key trust, #60 / #63 | rc.4 is published and contributor review/testing is requested. Validate the native prompt, delayed approval, restart persistence, changed-key refusal, host/port edits and deliberate reset against a disposable administrator-managed SSH server. Original reports remain open pending review. |
+| High | Combined S3 prefix/copy correction, #57 / #68 / #62 | Implemented in the unpublished local rc.5 candidate; verify root/non-root keys, spaces, punctuation and Unicode in rename/copy against a live compatible bucket. Legacy doubled-prefix objects remain in place and require deliberate migration, never an automatic move/delete. |
 | High | Runtime dependency advisory | Current production audit reports 2 high affected-package entries, `braces` and `chokidar`, from the same braces advisory chain. Resolve or document a reviewed mitigation; do not use `npm audit fix --force` blindly. Watcher dependency upgrades require API, glob and Electron compatibility review. |
 | Medium | Development dependency advisory | Full audit also reports 3 moderate affected-package entries via `moment`, `obsidian` and `eslint-plugin-obsidianmd`. Evaluate patched dependencies or exposure; do not downgrade host typings merely to satisfy the suggested audit fix. |
 | Medium | Security policy, #71 | Finish policy/contact review and integrate documentation. |

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Local test candidate: **2.15.5-rc.5**, based on published rc.4 plus the combined
+S3 #57/#68 changes. This candidate is not a published release or stable promotion.
+
+### Fixed
+- Apply S3 mount prefixes exactly once to server paths, including active cloud device overrides. Bucket-root mounts retain their existing key mapping.
+- URL-encode S3 copy/rename source key segments, including spaces, Unicode, percent signs and reserved characters, while retaining slash separators and literal destination keys. File and paginated folder copies share the same encoding helper.
+
+### Migration And Testing
+- Existing non-root S3 mounts previously addressed doubled keys such as `notes/notes/a.md`. They now address `notes/a.md`. Old objects are not moved or deleted; they may appear under an extra nested folder rather than their former virtual location. Inspect the bucket with a provider tool and back up/copy objects before any explicit migration. Do not overwrite an existing corrected key.
+- This does not fix recursive S3 folder deletion or make copy/rename atomic. Failed folder copies can leave partial destination copies; source objects are retained. Do not use valuable data for failure tests.
+- Use the [Windows cumulative test checklist](docs/WINDOWS_TEST_CHECKLIST.md) for the local candidate. The published rc.4 SFTP release is unchanged, and native/live-provider results remain pending.
+
 ## [2.15.5-rc.4] - 2026-10-03
 
 This opt-in SFTP identity-verification test release builds on rc.3. It addresses
