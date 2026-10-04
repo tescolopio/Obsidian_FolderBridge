@@ -21,6 +21,12 @@ from those remaining gates. Existing root-deletion preferences are preserved;
 review that setting if a failed rc.2 remote-trash attempt changed your choice.
 Stable 2.15.4 remains latest.
 
+**Local development candidate:** unpublished 2.15.5-rc.5 adds the combined S3
+prefix/copy-source corrections on top of all rc.4 fixes. It is not available in
+the rc.4 release assets. Existing doubled-prefix objects are not automatically
+migrated or deleted; inspect the bucket before resuming writes. See the
+[Windows cumulative test checklist](docs/WINDOWS_TEST_CHECKLIST.md).
+
 **Validation limits (stable 2.15.4):** the release passed 400 automated tests across 13 files, plus lint, UI text checks, typechecking, and the production build. The full native Windows/WSL, macOS, Android, and current/oldest Obsidian host checks remain incomplete. Reporters confirmed two specific fixes on the earlier rc.2 build, not the complete 2.15.4 matrix. Automated tests do not establish native editor, Outline, metadata, or save compatibility. Back up your vault, settings, and mounted source folders; test writes on disposable copies. See the [release validation checklist](docs/RELEASE_VALIDATION.md).
 
 ## Full Feature List

@@ -1,5 +1,14 @@
 # Compatibility Release Validation
 
+## Windows Cumulative Local Candidate
+
+The unpublished local 2.15.5-rc.5 candidate contains all published rc.4 fixes plus
+the combined S3 #57/#68 changes. Follow the
+[Windows test checklist](WINDOWS_TEST_CHECKLIST.md), especially the S3 migration
+warning, and record actual native outcomes in the
+[results sheet](NATIVE_TEST_RESULTS.md). Published rc.4 remains the separate
+SFTP test release; neither candidate is stable promotion.
+
 ## Safety Candidate: 2.15.5-rc.3
 
 The October 2-3 stabilization work is tracked in the

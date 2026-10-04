@@ -163,26 +163,20 @@ export class S3Adapter {
     // ------------------------------------------------------------------
 
     /**
-     * Translate a server-relative path (the value produced by
-     * PathMapper.toRealPath for an S3 mount) into an S3 object key.
+     * Translate the full server path produced by VirtualAdapter.toServerPath
+     * into an S3 object key. PathMapper has already applied the effective mount
+     * prefix, including device overrides; do not prepend it a second time.
      *
-     * PathMapper stores `mount.realPath` as the key prefix root (e.g. "/" or
-     * "/notes/").  The server-relative path handed to us already has that
-     * prefix stripped — it is the path relative to the S3 mount root.
-     * We prepend `this.prefix` (mount.realPath normalised) to form the full key.
      */
-    private toKey(serverRelativePath: string): string {
-        // Normalise to forward slashes; strip leading slash
-        const clean = serverRelativePath.replace(/\\/g, '/').replace(/^\//, '');
-        return this.prefix ? `${this.prefix}${clean}` : clean;
+    private toKey(serverPath: string): string {
+        return serverPath.replace(/\\/g, '/').replace(/^\/+/, '');
     }
 
     /**
-     * Convert an S3 object key back to a server-relative path (leading slash).
+     * Convert an S3 object key back to a full server path (leading slash).
      */
     private fromKey(key: string): string {
-        const stripped = this.prefix ? key.slice(this.prefix.length) : key;
-        return stripped.startsWith('/') ? stripped : '/' + stripped;
+        return key.startsWith('/') ? key : '/' + key;
     }
 
     /**
@@ -539,7 +533,7 @@ export class S3Adapter {
         } else {
             const cmd = new aws.CopyObjectCommand({
                 Bucket: this.bucket,
-                CopySource: `${this.bucket}/${srcKey}`,
+                CopySource: this.copySource(srcKey),
                 Key: dstKey,
             });
             await this.client.send(cmd);
@@ -567,7 +561,7 @@ export class S3Adapter {
                 const dstKey = normalizedDst + srcKey.slice(normalizedSrc.length);
                 await this.client.send(new aws.CopyObjectCommand({
                     Bucket: this.bucket,
-                    CopySource: `${this.bucket}/${srcKey}`,
+                    CopySource: this.copySource(srcKey),
                     Key: dstKey,
                 }));
             }
@@ -579,6 +573,13 @@ export class S3Adapter {
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    private copySource(key: string): string {
+        // RFC 3986 escaping, preserving separators and encoding literal percent signs.
+        const encoded = key.split('/').map(segment => encodeURIComponent(segment)
+            .replace(/[!'()*]/g, character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)).join('/');
+        return `${this.bucket}/${encoded}`;
+    }
 
     private isNotFound(err: unknown): boolean {
         if (typeof err !== 'object' || err === null) return false;
