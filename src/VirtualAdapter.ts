@@ -9,6 +9,7 @@ import { FileServer, STREAMING_MIME } from './FileServer';
 import { logger } from './logger';
 import { isVisibleFileInMount } from './mountFileFilter';
 import { loadOptionalNodeModule } from './runtimeNode';
+import { decodeText } from './textEncoding';
 import {
 	realPathToResourceUrl,
 	tryReadAsDataUri,
@@ -75,6 +76,11 @@ export class VirtualAdapter {
 	 * external watcher backend is unavailable or suppressed.
 	 */
 	private onDelete?: (normalizedPath: string) => Promise<void>;
+	/**
+	 * Mounted text files (vault paths) last read in an encoding other than
+	 * UTF-8. Saving them is refused; see src/textEncoding.ts.
+	 */
+	private nonUtf8Files: Set<string> = new Set();
 
 	constructor(
 		original: unknown,
@@ -564,7 +570,11 @@ export class VirtualAdapter {
 			const realPath = this.toReal(normalizedPath, mount);
 			this.assertAllowed(realPath);
 			try {
-				return await fs.promises.readFile(realPath, 'utf8');
+				const { text, nonUtf8 } = decodeText(await fs.promises.readFile(realPath));
+				const key = normalizePath(normalizedPath);
+				if (nonUtf8) this.nonUtf8Files.add(key);
+				else this.nonUtf8Files.delete(key);
+				return text;
 			} catch (e) {
 				logger.error(`[FolderBridge] read failed for "${realPath}":`, e);
 				if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -640,6 +650,45 @@ export class VirtualAdapter {
 	// write / writeBinary / append / process
 	// ------------------------------------------------------------------
 
+	/**
+	 * Refuse a text save over a mounted file stored in another encoding:
+	 * writing UTF-8 would change its bytes for every other program and
+	 * colleague that reads it in its own encoding. The flag is re-checked
+	 * against the file on disk, so a file converted to UTF-8 (or replaced)
+	 * since it was read can be saved again.
+	 */
+	private async assertTextSavable(normalizedPath: string, realPath: string): Promise<void> {
+		const key = normalizePath(normalizedPath);
+		if (!this.nonUtf8Files.has(key)) return;
+		let stillNonUtf8 = false;
+		try {
+			stillNonUtf8 = decodeText(await fs.promises.readFile(realPath)).nonUtf8;
+		} catch {
+			stillNonUtf8 = false; // gone or unreadable: the write reports real problems
+		}
+		if (!stillNonUtf8) {
+			this.nonUtf8Files.delete(key);
+			return;
+		}
+		throw new Error(
+			`Folder Bridge: "${path.basename(realPath)}" is not stored as UTF-8 text (it uses an older Windows encoding or UTF-16). ` +
+			`Saving it from Obsidian would change characters such as £ € é for everyone else who opens it, so it was not saved. ` +
+			`Convert it to UTF-8 in the program that created it, or edit it there.`
+		);
+	}
+
+	/** Keep the non-UTF-8 flags of a renamed file or folder with it. */
+	private moveNonUtf8Flags(oldPath: string, newPath: string): void {
+		const from = normalizePath(oldPath);
+		const to = normalizePath(newPath);
+		for (const key of [...this.nonUtf8Files]) {
+			if (key === from || key.startsWith(from + '/')) {
+				this.nonUtf8Files.delete(key);
+				this.nonUtf8Files.add(to + key.slice(from.length));
+			}
+		}
+	}
+
 	async write(normalizedPath: string, data: string, options?: unknown): Promise<void> {
 		const mount = this.pathMapper.getMountForPath(normalizedPath);
 		if (mount) {
@@ -671,6 +720,7 @@ export class VirtualAdapter {
 
 			this.assertAllowed(realPath);
 			this.assertNotReserved(realPath);
+			await this.assertTextSavable(normalizedPath, realPath);
 			if (this.dryRun) { logger.debug(`[FolderBridge DryRun] write → ${realPath}`); return; }
 			try {
 				await fs.promises.mkdir(path.dirname(realPath), { recursive: true });
@@ -758,6 +808,7 @@ export class VirtualAdapter {
 			}
 			const realPath = this.toReal(normalizedPath, mount);
 			this.assertAllowed(realPath);
+			await this.assertTextSavable(normalizedPath, realPath);
 			if (this.dryRun) { logger.debug(`[FolderBridge DryRun] append → ${realPath}`); return; }
 			try {
 				await fs.promises.appendFile(realPath, data, 'utf8');
@@ -1260,10 +1311,12 @@ export class VirtualAdapter {
 					// Use fs.promises.cp so that both files and directories are handled.
 					await fs.promises.cp(srcReal, dstReal, { recursive: true });
 					await fs.promises.rm(srcReal, { recursive: true });
+					this.moveNonUtf8Flags(normalizedPath, newNormalizedPath);
 					return;
 				}
 				throw new Error(`Folder Bridge: ${translateFsError(err, 'rename')}`);
 			}
+			this.moveNonUtf8Flags(normalizedPath, newNormalizedPath);
 			return;
 		}
 

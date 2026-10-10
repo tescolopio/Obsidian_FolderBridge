@@ -533,3 +533,86 @@ describe('VirtualAdapter mount-root trash fallback', () => {
         }
     });
 });
+
+describe('VirtualAdapter text encodings on local mounts', () => {
+    const tempDirs: string[] = [];
+
+    afterEach(async () => {
+        await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
+    });
+
+    async function setup() {
+        const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'folderbridge-enc-'));
+        tempDirs.push(tempDir);
+        const mount = makeMount(tempDir);
+        const mapper = new PathMapper();
+        mapper.update([mount], 'test-device');
+        const adapter = new VirtualAdapter(
+            {},
+            mapper,
+            new SecurityManager([tempDir]),
+            false,
+            10 * 1024 * 1024,
+            async () => 'cancel',
+            async () => { },
+            () => false,
+        );
+        return { adapter, tempDir };
+    }
+
+    // "Price: £5 – café" in Windows-1252 (£ = A3, – = 96, é = E9)
+    const cp1252 = Buffer.from([0x50, 0x72, 0x69, 0x63, 0x65, 0x3a, 0x20, 0xa3, 0x35, 0x20, 0x96, 0x20, 0x63, 0x61, 0x66, 0xe9]);
+
+    it('reads a Windows-1252 note with the right characters and refuses to save it', async () => {
+        const { adapter, tempDir } = await setup();
+        const file = path.join(tempDir, 'old.md');
+        await fs.writeFile(file, cp1252);
+
+        expect(await adapter.read('Mounted/old.md')).toBe('Price: £5 – café');
+        await expect(adapter.write('Mounted/old.md', 'Price: £6 – café')).rejects.toThrow(/not stored as UTF-8/);
+        await expect(adapter.append('Mounted/old.md', '\nmore')).rejects.toThrow(/not stored as UTF-8/);
+        expect(Buffer.compare(await fs.readFile(file), cp1252)).toBe(0);
+    });
+
+    it('reads UTF-16 notes and refuses to save them', async () => {
+        const { adapter, tempDir } = await setup();
+        const file = path.join(tempDir, 'utf16.md');
+        const bytes = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('£ note', 'utf16le')]);
+        await fs.writeFile(file, bytes);
+
+        expect(await adapter.read('Mounted/utf16.md')).toBe('£ note');
+        await expect(adapter.write('Mounted/utf16.md', 'x')).rejects.toThrow(/not stored as UTF-8/);
+        expect(Buffer.compare(await fs.readFile(file), bytes)).toBe(0);
+    });
+
+    it('saves again once the file on disk is UTF-8', async () => {
+        const { adapter, tempDir } = await setup();
+        const file = path.join(tempDir, 'old.md');
+        await fs.writeFile(file, cp1252);
+        await adapter.read('Mounted/old.md');
+        await fs.writeFile(file, 'converted £', 'utf8'); // a colleague re-saved it as UTF-8
+
+        await adapter.write('Mounted/old.md', 'edited £');
+        expect(await fs.readFile(file, 'utf8')).toBe('edited £');
+    });
+
+    it('keeps the refusal when the note is renamed', async () => {
+        const { adapter, tempDir } = await setup();
+        await fs.writeFile(path.join(tempDir, 'old.md'), cp1252);
+        await adapter.read('Mounted/old.md');
+        await adapter.rename('Mounted/old.md', 'Mounted/renamed.md');
+
+        await expect(adapter.write('Mounted/renamed.md', 'x')).rejects.toThrow(/not stored as UTF-8/);
+    });
+
+    it('leaves UTF-8 notes, including a byte-order mark, exactly as before', async () => {
+        const { adapter, tempDir } = await setup();
+        const file = path.join(tempDir, 'bom.md');
+        await fs.writeFile(file, '﻿hello £', 'utf8');
+
+        const text = await adapter.read('Mounted/bom.md');
+        expect(text).toBe('﻿hello £');
+        await adapter.write('Mounted/bom.md', text + '!');
+        expect(await fs.readFile(file, 'utf8')).toBe('﻿hello £!');
+    });
+});
