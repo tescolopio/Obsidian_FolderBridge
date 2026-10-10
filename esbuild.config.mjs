@@ -22,8 +22,17 @@ const prod = (process.argv[2] === 'production');
  * ssh2 (a dependency of ssh2-sftp-client) ships a native crypto accelerator
  * but falls back gracefully to pure-JS crypto when the native binding is
  * unavailable.  Since esbuild cannot bundle .node binaries, we intercept
- * any require() for them and return a module that throws at call-time
- * (which triggers the pure-JS fallback path inside ssh2).
+ * any require() for them and return a module that throws when it is
+ * required, exactly like a missing binary would.
+ *
+ * It must throw at require time, not at call time: ssh2 picks its
+ * implementation with `try { binding = require('…/sshcrypto.node') } catch {}`
+ * and then uses the native classes whenever `binding` is set. A stub that
+ * loads successfully (e.g. a Proxy whose properties throw when called) makes
+ * ssh2 choose the native path, and every connection then fails on its first
+ * encrypted packet with "Native module not available … AESGCMDecipher" (or
+ * GenericDecipher, ChaChaPolyDecipher, depending on the negotiated cipher).
+ * cpu-features is required the same way inside a try, so it falls back too.
  */
 const nativeNodeModulesPlugin = {
 	name: 'native-node-modules',
@@ -33,17 +42,9 @@ const nativeNodeModulesPlugin = {
 			path: args.path,
 			namespace: 'node-native-stub',
 		}));
-		// Return a stub that throws — ssh2 catches this and uses pure-JS crypto
-		build.onLoad({ filter: /.*/, namespace: 'node-native-stub' }, () => ({
-			contents: `
-module.exports = new Proxy({}, {
-  get(_, key) {
-    return function() {
-      throw new Error('[Folder Bridge] Native module not available in bundled context: ' + key);
-    };
-  }
-});
-`,
+		// Throw on require, so callers' try/catch selects their pure-JS fallback
+		build.onLoad({ filter: /.*/, namespace: 'node-native-stub' }, args => ({
+			contents: `throw new Error(${JSON.stringify('[Folder Bridge] Native module not available in bundled context: ' + args.path)});\n`,
 			loader: 'js',
 		}));
 	},
