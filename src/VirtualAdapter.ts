@@ -1,7 +1,8 @@
 import { normalizePath, Notice, DataAdapter, DataWriteOptions } from 'obsidian';
 import { PathMapper } from './PathMapper';
 import { SecurityManager } from './SecurityManager';
-import { MountPoint } from './types';
+import { ConflictMode, MountPoint } from './types';
+import { RecentTexts, isMergeableText, mergeText } from './textMerge';
 import { WebDAVAdapter } from './WebDAVAdapter';
 import { S3Adapter } from './S3Adapter';
 import { SFTPAdapter } from './SFTPAdapter';
@@ -24,6 +25,24 @@ import {
 // will be null; local-mount operations gracefully fail while WebDAV mounts work.
 const fs: typeof import('fs') = loadOptionalNodeModule<typeof import('fs')>('fs') ?? null as never;
 const path: typeof import('path') = loadOptionalNodeModule<typeof import('path')>('path') ?? null as never;
+
+/** Folder inside the vault's .trash where someone else's version is kept when a save would replace it. */
+export const CONFLICT_COPIES_FOLDER = 'folderbridge-conflicts';
+
+/** Local date and time for file names, e.g. "2026-05-04 13.07.09" (no characters Windows forbids). */
+function fileStamp(date = new Date()): string {
+	const p = (n: number) => String(n).padStart(2, '0');
+	return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}.${p(date.getMinutes())}.${p(date.getSeconds())}`;
+}
+
+/** Decode UTF-8 text the way fs.readFile(…, 'utf8') does, or null when it isn't valid UTF-8. */
+function decodeUtf8(buf: Uint8Array): string | null {
+	try {
+		return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(buf);
+	} catch {
+		return null;
+	}
+}
 
 /**
  * VirtualAdapter is a shim that wraps Obsidian's built-in FileSystemAdapter.
@@ -75,6 +94,40 @@ export class VirtualAdapter {
 	 * external watcher backend is unavailable or suppressed.
 	 */
 	private onDelete?: (normalizedPath: string) => Promise<void>;
+	/**
+	 * The modification time Obsidian has for a vault path, or undefined when
+	 * Obsidian doesn't know the file (set by the plugin from the vault index).
+	 * A write to a path Obsidian doesn't know is a create, and a create must
+	 * never replace a file that already exists on the drive.
+	 */
+	getKnownMtime?: (normalizedPath: string) => number | undefined;
+	/**
+	 * What to do when a file on a local mount changed on the drive since
+	 * Obsidian last saw it and Obsidian saves over it (set by the plugin from
+	 * the settings, default 'merge'). Only used when getKnownMtime is set;
+	 * without it the adapter overwrites, as before.
+	 */
+	getConflictMode?: () => ConflictMode;
+	/**
+	 * Called after a save that merged in someone else's changes. Obsidian
+	 * ignores change events while it is saving, so the plugin tells the open
+	 * editor to reload the merged text once the save has finished.
+	 */
+	onMergedSave?: (normalizedPath: string) => void;
+	/** True when a path is open in an editor: its merge base is then never evicted from memory. */
+	isOpenInEditor?: (normalizedPath: string) => boolean;
+	/** The last text read or written per path on local mounts: the base of a three-way merge. */
+	private recentTexts = new RecentTexts(p => this.isOpenInEditor?.(p) ?? false);
+	/**
+	 * Per path, the modification time and size of the file right after this
+	 * adapter last wrote it. Obsidian learns the new time only a moment later
+	 * (onModify runs in the background, and not at all when events are
+	 * suppressed), so a second quick save must not mistake our own previous
+	 * save for someone else's change.
+	 */
+	private ownWrites = new Map<string, { mtime: number; size: number }>();
+	/** Paths being saved by process(): it has just read the file, so there is nothing to protect. */
+	private processing = new Set<string>();
 
 	constructor(
 		original: unknown,
@@ -564,7 +617,9 @@ export class VirtualAdapter {
 			const realPath = this.toReal(normalizedPath, mount);
 			this.assertAllowed(realPath);
 			try {
-				return await fs.promises.readFile(realPath, 'utf8');
+				const key = normalizePath(normalizedPath);
+				if (!this.getKnownMtime || !isMergeableText(key)) return await fs.promises.readFile(realPath, 'utf8');
+				return await this.readAndRemember(key, realPath);
 			} catch (e) {
 				logger.error(`[FolderBridge] read failed for "${realPath}":`, e);
 				if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -636,9 +691,177 @@ export class VirtualAdapter {
 		return this.orig().readBinary(normalizedPath);
 	}
 
+	/**
+	 * Read a text file on a local mount and remember the text as the base for
+	 * a later merge, tagged with the modification time of the exact version
+	 * read (the time is taken before and after the read on the open file; if
+	 * the file changed in between, nothing is remembered).
+	 */
+	private async readAndRemember(key: string, realPath: string): Promise<string> {
+		const handle = await fs.promises.open(realPath, 'r');
+		try {
+			const before = await handle.stat();
+			const text = await handle.readFile('utf8');
+			const after = await handle.stat();
+			if (before.mtimeMs === after.mtimeMs && before.size === after.size) this.recentTexts.set(key, text, Math.round(after.mtimeMs));
+			else this.recentTexts.delete(key);
+			return text;
+		} finally {
+			await handle.close().catch(() => { });
+		}
+	}
+
+	// ------------------------------------------------------------------
+	// Changed on the drive since Obsidian last saw it (local mounts)
+	// ------------------------------------------------------------------
+
+	/**
+	 * Before a save over a file Obsidian knows: has someone else changed it on
+	 * the drive since Obsidian last saw it (a colleague's save that the
+	 * watcher hasn't reported yet, or a share that never reports changes)?
+	 * Depending on the conflict setting:
+	 * - overwrite: save anyway (last save wins).
+	 * - copy: keep their version as a copy in the vault's .trash folder, then
+	 *   save. If the copy can't be made, the save is refused.
+	 * - merge (text files only): combine both sets of changes against the
+	 *   last text Obsidian read or wrote. When that isn't possible (no base,
+	 *   both changed the same lines, not UTF-8, binary file), as copy.
+	 * `mine` is the text being saved, or null for a binary write. Returns the
+	 * text to write instead (a merge) or null to write the original data, and
+	 * a message to show once the save succeeded.
+	 */
+	private async resolveChangedOnDisk(key: string, realPath: string, mine: string | null): Promise<{ merged: string | null; notice: string | null }> {
+		const unchanged = { merged: null, notice: null };
+		if (this.processing.has(key)) return unchanged;
+		const mode = this.getConflictMode?.() ?? 'overwrite';
+		if (mode === 'overwrite') return unchanged;
+		const known = this.getKnownMtime?.(key);
+		if (known === undefined) return unchanged; // no vault lookup, or a new file
+		let disk: import('fs').Stats;
+		try {
+			disk = await fs.promises.stat(realPath);
+		} catch {
+			return unchanged; // missing or unreadable: the write itself reports real problems
+		}
+		if (!disk.isFile()) return unchanged;
+		const diskMtime = Math.round(disk.mtimeMs);
+		if (diskMtime === Math.round(known)) return unchanged;
+		const own = this.ownWrites.get(key);
+		if (own && own.mtime === diskMtime && own.size === disk.size) return unchanged; // our own previous save
+
+		const name = path.basename(realPath);
+		let mergeFailed = false;
+		if (mine !== null) {
+			const onDisk = await fs.promises.readFile(realPath).catch(() => null);
+			const theirs = onDisk ? decodeUtf8(onDisk) : null;
+			const recent = this.recentTexts.get(key);
+			// The base must be the version Obsidian edited, not a later read of theirs.
+			const base = recent && (recent.mtime === Math.round(known) || recent.mtime === own?.mtime) ? recent.text : undefined;
+			if (theirs !== null) {
+				if (theirs === mine || theirs === base) return unchanged; // same text, only the time changed
+				if (mode === 'merge' && base !== undefined && isMergeableText(key)) {
+					const result = mergeText(base, mine, theirs);
+					if (result.clean && result.merged === mine) return unchanged; // they made the same changes
+					if (result.clean) {
+						return {
+							merged: result.merged,
+							notice: `Folder Bridge: "${name}" was changed on the drive while you edited it. Both sets of changes were merged.`,
+						};
+					}
+				}
+			}
+			mergeFailed = mode === 'merge' && isMergeableText(key);
+		}
+		const copyName = await this.keepTheirVersion(realPath);
+		const why = mergeFailed ? ' and the changes could not be merged automatically' : '';
+		return {
+			merged: null,
+			notice: `Folder Bridge: "${name}" was changed on the drive by someone else after Obsidian loaded it${why}. ` +
+				`Their version was kept as "${copyName}" in the vault's .trash/${CONFLICT_COPIES_FOLDER} folder, then yours was saved.`,
+		};
+	}
+
+	/**
+	 * Copy the file on the drive (someone else's version) into
+	 * <vault>/.trash/folderbridge-conflicts before a save replaces it.
+	 * Returns the copy's name. Throws (and so refuses the save) when no copy
+	 * could be made: their version must not be lost.
+	 */
+	private async keepTheirVersion(realPath: string): Promise<string> {
+		const name = path.basename(realPath);
+		const refuse = (reason: string) => new Error(
+			`Folder Bridge: "${name}" was changed on the drive by someone else after Obsidian loaded it, and their version ` +
+			`could not be kept as a copy (${reason}). Your changes were not saved, so their version is untouched. ` +
+			`Copy your text somewhere safe, then reopen the note.`
+		);
+		const basePath = (this.orig() as DataAdapter & { getBasePath?(): string }).getBasePath?.();
+		if (!basePath) throw refuse('the vault folder could not be found');
+		const dir = path.join(basePath, '.trash', CONFLICT_COPIES_FOLDER);
+		const ext = path.extname(name);
+		const stem = path.basename(name, ext);
+		const when = fileStamp();
+		try {
+			await fs.promises.mkdir(dir, { recursive: true });
+			for (let n = 1; ; n++) {
+				const copyName = `${stem} (changed by someone else ${when}${n > 1 ? ` ${n}` : ''})${ext}`;
+				try {
+					await fs.promises.copyFile(realPath, path.join(dir, copyName), fs.constants.COPYFILE_EXCL);
+					return copyName;
+				} catch (e) {
+					if ((e as NodeJS.ErrnoException).code !== 'EEXIST' || n >= 50) throw e;
+				}
+			}
+		} catch (e) {
+			logger.error(`[FolderBridge] could not keep a copy of "${realPath}" before saving:`, e);
+			throw refuse(translateFsError(e as NodeJS.ErrnoException, 'copy').replace(/\.$/, ''));
+		}
+	}
+
+	/** After a successful local write: remember what we wrote (see ownWrites, recentTexts). */
+	private async rememberOwnWrite(key: string, realPath: string, text: string | null): Promise<void> {
+		if (!this.getKnownMtime) return;
+		try {
+			const s = await fs.promises.stat(realPath);
+			const mtime = Math.round(s.mtimeMs);
+			this.ownWrites.set(key, { mtime, size: s.size });
+			if (text !== null && isMergeableText(key)) this.recentTexts.set(key, text, mtime);
+			else this.recentTexts.delete(key);
+		} catch {
+			this.ownWrites.delete(key);
+			this.recentTexts.delete(key);
+		}
+	}
+
 	// ------------------------------------------------------------------
 	// write / writeBinary / append / process
 	// ------------------------------------------------------------------
+
+	/**
+	 * Write a file on a local mount. A file Obsidian doesn't know yet is
+	 * created with the "wx" flag, so vault.create() can never replace a file
+	 * someone else put on the drive (a colleague's note with the same name, or
+	 * one the watcher hasn't reported yet). That case throws an EEXIST error.
+	 */
+	private async writeLocalFile(normalizedPath: string, realPath: string, content: string | Buffer, op: string): Promise<void> {
+		const isCreate = this.getKnownMtime !== undefined && this.getKnownMtime(normalizePath(normalizedPath)) === undefined;
+		await fs.promises.mkdir(path.dirname(realPath), { recursive: true });
+		try {
+			const encoding = typeof content === 'string' ? 'utf8' : undefined;
+			if (isCreate) await fs.promises.writeFile(realPath, content, { flag: 'wx', encoding });
+			else if (encoding) await fs.promises.writeFile(realPath, content, encoding);
+			else await fs.promises.writeFile(realPath, content);
+		} catch (e) {
+			if (isCreate && (e as NodeJS.ErrnoException).code === 'EEXIST') {
+				const err = new Error(
+					`Folder Bridge: "${path.basename(realPath)}" already exists on the drive, so it was not replaced. ` +
+					`It may have just been created by someone else; it will appear in the vault shortly. Choose another name.`
+				) as NodeJS.ErrnoException;
+				err.code = 'EEXIST';
+				throw err;
+			}
+			throw new Error(`Folder Bridge: ${translateFsError(e as NodeJS.ErrnoException, op)}`);
+		}
+	}
 
 	async write(normalizedPath: string, data: string, options?: unknown): Promise<void> {
 		const mount = this.pathMapper.getMountForPath(normalizedPath);
@@ -673,14 +896,19 @@ export class VirtualAdapter {
 			this.assertNotReserved(realPath);
 			if (this.dryRun) { logger.debug(`[FolderBridge DryRun] write → ${realPath}`); return; }
 			try {
-				await fs.promises.mkdir(path.dirname(realPath), { recursive: true });
-				await fs.promises.writeFile(realPath, data, 'utf8');
+				const key = normalizePath(normalizedPath);
+				const { merged, notice } = await this.resolveChangedOnDisk(key, realPath, data);
+				const text = merged ?? data;
+				await this.writeLocalFile(normalizedPath, realPath, text, 'write');
+				await this.rememberOwnWrite(key, realPath, text);
 				void this.onModify?.(normalizedPath).catch(() => { });
+				if (notice) new Notice(notice, merged !== null ? 8000 : 15000);
+				if (merged !== null) this.onMergedSave?.(normalizedPath);
 				return;
 			} catch (e) {
-				const errorMsg = `Folder Bridge: ${translateFsError(e as NodeJS.ErrnoException, 'write')}`;
-				logger.error(`[FolderBridge] write failed for "${realPath}":`, e, errorMsg);
-				throw new Error(errorMsg);
+				logger.error(`[FolderBridge] write failed for "${realPath}":`, e);
+				if ((e as Error).message?.startsWith('Folder Bridge:')) throw e;
+				throw new Error(`Folder Bridge: ${translateFsError(e as NodeJS.ErrnoException, 'write')}`);
 			}
 		}
 		return this.orig().write(normalizedPath, data, options as DataWriteOptions | undefined);
@@ -718,11 +946,16 @@ export class VirtualAdapter {
 			this.assertNotReserved(realPath);
 			if (this.dryRun) { logger.debug(`[FolderBridge DryRun] writeBinary → ${realPath}`); return; }
 			try {
-				await fs.promises.mkdir(path.dirname(realPath), { recursive: true });
-				await fs.promises.writeFile(realPath, Buffer.from(data));
+				const key = normalizePath(normalizedPath);
+				// Binary: keep a copy of their version or overwrite, never merge.
+				const { notice } = await this.resolveChangedOnDisk(key, realPath, null);
+				await this.writeLocalFile(normalizedPath, realPath, Buffer.from(data), 'writeBinary');
+				await this.rememberOwnWrite(key, realPath, null);
 				void this.onModify?.(normalizedPath).catch(() => { });
+				if (notice) new Notice(notice, 15000);
 				return;
 			} catch (e) {
+				if ((e as Error).message?.startsWith('Folder Bridge:')) throw e;
 				throw new Error(`Folder Bridge: ${translateFsError(e as NodeJS.ErrnoException, 'writeBinary')}`);
 			}
 		}
@@ -761,6 +994,7 @@ export class VirtualAdapter {
 			if (this.dryRun) { logger.debug(`[FolderBridge DryRun] append → ${realPath}`); return; }
 			try {
 				await fs.promises.appendFile(realPath, data, 'utf8');
+				await this.rememberOwnWrite(normalizePath(normalizedPath), realPath, null);
 				void this.onModify?.(normalizedPath).catch(() => { });
 				return;
 			} catch (e) {
@@ -785,6 +1019,7 @@ export class VirtualAdapter {
 		if (this.dryRun) { logger.debug(`[FolderBridge DryRun] appendBinary: ${realPath}`); return; }
 		try {
 			await fs.promises.appendFile(realPath, Buffer.from(data));
+			await this.rememberOwnWrite(normalizePath(normalizedPath), realPath, null);
 			void this.onModify?.(normalizedPath).catch(() => { });
 		} catch (error) {
 			throw new Error(`Folder Bridge: ${translateFsError(error as NodeJS.ErrnoException, 'appendBinary')}`);
@@ -802,7 +1037,15 @@ export class VirtualAdapter {
 			this.assertVisibleMountFile(normalizedPath, mount);
 			const content = await this.read(normalizedPath);
 			const updated = fn(content);
-			await this.write(normalizedPath, updated, options);
+			// The text was derived from what is on the drive right now: saving it
+			// can't lose anyone's change, so skip the changed-on-disk check.
+			const key = normalizePath(normalizedPath);
+			this.processing.add(key);
+			try {
+				await this.write(normalizedPath, updated, options);
+			} finally {
+				this.processing.delete(key);
+			}
 			return updated;
 		}
 		return this.orig().process(normalizedPath, fn, options as DataWriteOptions | undefined);

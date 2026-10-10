@@ -469,6 +469,42 @@ describe('main fallback regressions', () => {
         expect(plugin.settings.mountPoints.map(entry => entry.id)).toEqual(['existing']);
     });
 
+    it('loads the changed-on-the-drive setting and falls back to merge for unknown values', async () => {
+        const { plugin } = await makePlugin();
+        expect(plugin.settings.conflictMode).toBe('merge');
+        for (const [saved, expected] of [['copy', 'copy'], ['overwrite', 'overwrite'], ['ask', 'merge'], [42, 'merge'], [undefined, 'merge']] as const) {
+            Object.assign(plugin, { loadData: vi.fn().mockResolvedValue({ ...DEFAULT_SETTINGS, deviceId: 'desktop', conflictMode: saved }) });
+            await plugin.loadSettings();
+            expect(plugin.settings.conflictMode).toBe(expected);
+        }
+    });
+
+    it('tells the editor to reload a merged note once Obsidian finished saving it', async () => {
+        const existing = mount('docs');
+        const { plugin, app, files } = await makePlugin([existing]);
+        const installer = plugin as unknown as { installVirtualAdapter(): void };
+        installer.installVirtualAdapter();
+        const stat = { type: 'file' as const, size: 5, ctime: 1, mtime: 2 };
+        vi.spyOn(app.vault.adapter, 'stat').mockResolvedValue(stat);
+        const file = Object.assign(new TFile(), { path: 'docs/note.md', saving: true });
+        files.set(file.path, file);
+        const onChange = (app.vault as unknown as { onChange: ReturnType<typeof vi.fn> }).onChange;
+        onChange.mockClear();
+        vi.useFakeTimers();
+        vi.stubGlobal('window', globalThis);
+        try {
+            (plugin.virtualAdapter as VirtualAdapter).onMergedSave?.('docs/note.md');
+            await vi.advanceTimersByTimeAsync(500);
+            expect(onChange).not.toHaveBeenCalled(); // still saving: Obsidian would ignore it
+            file.saving = false;
+            await vi.advanceTimersByTimeAsync(200);
+            expect(onChange.mock.calls).toEqual([['modified', 'docs/note.md', null, stat]]);
+        } finally {
+            vi.useRealTimers();
+            vi.unstubAllGlobals();
+        }
+    });
+
     it('clears a cached root even when there is no fallback to probe', async () => {
         const existing = mount('docs');
         const { plugin } = await makePlugin([existing]);

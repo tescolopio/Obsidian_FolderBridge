@@ -126,6 +126,15 @@ export interface MountPoint {
 	tocSourcePath?: string;
 }
 
+/**
+ * What to do when a note on a local mount changed on the drive (someone
+ * else saved it) after Obsidian last loaded it, and Obsidian is saving:
+ * - merge: combine both sets of changes; when that isn't possible, as copy.
+ * - copy: keep their version as a copy in the vault's .trash folder, then save.
+ * - overwrite: save without checking (last save wins).
+ */
+export type ConflictMode = 'merge' | 'copy' | 'overwrite';
+
 export interface FolderBridgeSettings {
 	mountPoints: MountPoint[];
 	allowlist: string[];    // Approved real paths (must match before any I/O)
@@ -136,6 +145,8 @@ export interface FolderBridgeSettings {
 	dryRun: boolean;        // Log writes without executing them
 	showStatusBar: boolean;
 	mountRootDeletionBehavior: 'ask' | 'unmount' | 'delete';
+	/** A note changed on a local mount since Obsidian loaded it: merge, keep a copy, or overwrite. */
+	conflictMode: ConflictMode;
 	deviceId: string;       // Unique ID for this specific device
 	allowForeignMounts: boolean; // Allow mounting paths created on other devices
 	/** Maximum size (in MB) of files that will be served as data: URIs (images, PDFs). */
@@ -164,6 +175,7 @@ export const DEFAULT_SETTINGS: FolderBridgeSettings = {
 	dryRun: false,
 	showStatusBar: true,
 	mountRootDeletionBehavior: 'ask',
+	conflictMode: 'merge',
 	deviceId: '',
 	allowForeignMounts: false,
 	maxDataUriMB: 10,
