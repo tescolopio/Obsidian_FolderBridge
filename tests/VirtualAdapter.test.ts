@@ -533,3 +533,68 @@ describe('VirtualAdapter mount-root trash fallback', () => {
         }
     });
 });
+
+describe('VirtualAdapter creates on local mounts never replace existing files', () => {
+    const tempDirs: string[] = [];
+
+    afterEach(async () => {
+        await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
+    });
+
+    async function setup(known: string[] | null) {
+        const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'folderbridge-create-'));
+        tempDirs.push(tempDir);
+        const mount = makeMount(tempDir);
+        const mapper = new PathMapper();
+        mapper.update([mount], 'test-device');
+        const onModify = vi.fn().mockResolvedValue(undefined);
+        const adapter = new VirtualAdapter(
+            {},
+            mapper,
+            new SecurityManager([tempDir]),
+            false,
+            10 * 1024 * 1024,
+            async () => 'cancel',
+            async () => { },
+            () => false,
+            onModify,
+        );
+        // Like the plugin: Obsidian's vault index decides what counts as a create.
+        if (known) adapter.getKnownMtime = p => (known.includes(p) ? 1 : undefined);
+        return { adapter, tempDir, onModify };
+    }
+
+    it('refuses to create over a file Obsidian has not seen, leaving it untouched', async () => {
+        const { adapter, tempDir, onModify } = await setup([]);
+        await fs.writeFile(path.join(tempDir, 'Budget.md'), 'colleague text');
+
+        const err = await adapter.write('Mounted/Budget.md', 'my new note').then(() => null, (e: unknown) => e as NodeJS.ErrnoException);
+        if (!err) throw new Error('expected the create to be refused');
+        expect(err.code).toBe('EEXIST');
+        expect(err.message).toMatch(/already exists on the drive/);
+        await expect(adapter.writeBinary('Mounted/Budget.md', new Uint8Array([1]).buffer)).rejects.toMatchObject({ code: 'EEXIST' });
+        expect(await fs.readFile(path.join(tempDir, 'Budget.md'), 'utf8')).toBe('colleague text');
+        expect(onModify).not.toHaveBeenCalled();
+    });
+
+    it('creates new files, including missing parent folders', async () => {
+        const { adapter, tempDir, onModify } = await setup([]);
+        await adapter.write('Mounted/New/Plan.md', 'hello');
+        expect(await fs.readFile(path.join(tempDir, 'New', 'Plan.md'), 'utf8')).toBe('hello');
+        expect(onModify).toHaveBeenCalledWith('Mounted/New/Plan.md');
+    });
+
+    it('saves over files Obsidian already knows', async () => {
+        const { adapter, tempDir } = await setup(['Mounted/Budget.md']);
+        await fs.writeFile(path.join(tempDir, 'Budget.md'), 'old');
+        await adapter.write('Mounted/Budget.md', 'new');
+        expect(await fs.readFile(path.join(tempDir, 'Budget.md'), 'utf8')).toBe('new');
+    });
+
+    it('keeps the previous behaviour when the plugin provides no vault lookup', async () => {
+        const { adapter, tempDir } = await setup(null);
+        await fs.writeFile(path.join(tempDir, 'Budget.md'), 'old');
+        await adapter.write('Mounted/Budget.md', 'new');
+        expect(await fs.readFile(path.join(tempDir, 'Budget.md'), 'utf8')).toBe('new');
+    });
+});

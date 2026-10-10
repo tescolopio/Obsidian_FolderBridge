@@ -75,6 +75,13 @@ export class VirtualAdapter {
 	 * external watcher backend is unavailable or suppressed.
 	 */
 	private onDelete?: (normalizedPath: string) => Promise<void>;
+	/**
+	 * The modification time Obsidian has for a vault path, or undefined when
+	 * Obsidian doesn't know the file (set by the plugin from the vault index).
+	 * A write to a path Obsidian doesn't know is a create, and a create must
+	 * never replace a file that already exists on the drive.
+	 */
+	getKnownMtime?: (normalizedPath: string) => number | undefined;
 
 	constructor(
 		original: unknown,
@@ -640,6 +647,33 @@ export class VirtualAdapter {
 	// write / writeBinary / append / process
 	// ------------------------------------------------------------------
 
+	/**
+	 * Write a file on a local mount. A file Obsidian doesn't know yet is
+	 * created with the "wx" flag, so vault.create() can never replace a file
+	 * someone else put on the drive (a colleague's note with the same name, or
+	 * one the watcher hasn't reported yet). That case throws an EEXIST error.
+	 */
+	private async writeLocalFile(normalizedPath: string, realPath: string, content: string | Buffer, op: string): Promise<void> {
+		const isCreate = this.getKnownMtime !== undefined && this.getKnownMtime(normalizePath(normalizedPath)) === undefined;
+		await fs.promises.mkdir(path.dirname(realPath), { recursive: true });
+		try {
+			const encoding = typeof content === 'string' ? 'utf8' : undefined;
+			if (isCreate) await fs.promises.writeFile(realPath, content, { flag: 'wx', encoding });
+			else if (encoding) await fs.promises.writeFile(realPath, content, encoding);
+			else await fs.promises.writeFile(realPath, content);
+		} catch (e) {
+			if (isCreate && (e as NodeJS.ErrnoException).code === 'EEXIST') {
+				const err = new Error(
+					`Folder Bridge: "${path.basename(realPath)}" already exists on the drive, so it was not replaced. ` +
+					`It may have just been created by someone else; it will appear in the vault shortly. Choose another name.`
+				) as NodeJS.ErrnoException;
+				err.code = 'EEXIST';
+				throw err;
+			}
+			throw new Error(`Folder Bridge: ${translateFsError(e as NodeJS.ErrnoException, op)}`);
+		}
+	}
+
 	async write(normalizedPath: string, data: string, options?: unknown): Promise<void> {
 		const mount = this.pathMapper.getMountForPath(normalizedPath);
 		if (mount) {
@@ -673,14 +707,13 @@ export class VirtualAdapter {
 			this.assertNotReserved(realPath);
 			if (this.dryRun) { logger.debug(`[FolderBridge DryRun] write → ${realPath}`); return; }
 			try {
-				await fs.promises.mkdir(path.dirname(realPath), { recursive: true });
-				await fs.promises.writeFile(realPath, data, 'utf8');
+				await this.writeLocalFile(normalizedPath, realPath, data, 'write');
 				void this.onModify?.(normalizedPath).catch(() => { });
 				return;
 			} catch (e) {
-				const errorMsg = `Folder Bridge: ${translateFsError(e as NodeJS.ErrnoException, 'write')}`;
-				logger.error(`[FolderBridge] write failed for "${realPath}":`, e, errorMsg);
-				throw new Error(errorMsg);
+				logger.error(`[FolderBridge] write failed for "${realPath}":`, e);
+				if ((e as Error).message?.startsWith('Folder Bridge:')) throw e;
+				throw new Error(`Folder Bridge: ${translateFsError(e as NodeJS.ErrnoException, 'write')}`);
 			}
 		}
 		return this.orig().write(normalizedPath, data, options as DataWriteOptions | undefined);
@@ -718,11 +751,11 @@ export class VirtualAdapter {
 			this.assertNotReserved(realPath);
 			if (this.dryRun) { logger.debug(`[FolderBridge DryRun] writeBinary → ${realPath}`); return; }
 			try {
-				await fs.promises.mkdir(path.dirname(realPath), { recursive: true });
-				await fs.promises.writeFile(realPath, Buffer.from(data));
+				await this.writeLocalFile(normalizedPath, realPath, Buffer.from(data), 'writeBinary');
 				void this.onModify?.(normalizedPath).catch(() => { });
 				return;
 			} catch (e) {
+				if ((e as Error).message?.startsWith('Folder Bridge:')) throw e;
 				throw new Error(`Folder Bridge: ${translateFsError(e as NodeJS.ErrnoException, 'writeBinary')}`);
 			}
 		}
