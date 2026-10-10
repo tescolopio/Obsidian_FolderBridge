@@ -6,11 +6,26 @@ import * as path from 'path';
 import { PathMapper } from '../src/PathMapper';
 import { SecurityManager } from '../src/SecurityManager';
 import { VirtualAdapter } from '../src/VirtualAdapter';
-import type { MountPoint } from '../src/types';
+import type { ConflictMode, MountPoint } from '../src/types';
 import * as runtimeNode from '../src/runtimeNode';
 import { WebDAVAdapter } from '../src/WebDAVAdapter';
 import { S3Adapter } from '../src/S3Adapter';
 import { SFTPAdapter } from '../src/SFTPAdapter';
+
+// Record the messages shown to the user.
+const notices = vi.hoisted(() => [] as string[]);
+vi.mock('obsidian', async importOriginal => {
+    const original = await importOriginal<typeof import('obsidian')>();
+    return {
+        ...original,
+        Notice: class extends original.Notice {
+            constructor(message: string, timeout?: number) {
+                super(message, timeout);
+                notices.push(message);
+            }
+        },
+    };
+});
 
 function makeMount(realPath: string): MountPoint {
     return {
@@ -596,5 +611,216 @@ describe('VirtualAdapter creates on local mounts never replace existing files', 
         await fs.writeFile(path.join(tempDir, 'Budget.md'), 'old');
         await adapter.write('Mounted/Budget.md', 'new');
         expect(await fs.readFile(path.join(tempDir, 'Budget.md'), 'utf8')).toBe('new');
+    });
+});
+
+describe('VirtualAdapter saves over a note someone else changed on the drive', () => {
+    const tempDirs: string[] = [];
+    const NOTE = 'Mounted/Budget.md';
+
+    afterEach(async () => {
+        await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
+    });
+
+    async function setup(options: { mode?: ConflictMode; vaultPath?: boolean; hook?: boolean } = {}) {
+        notices.length = 0;
+        const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'folderbridge-conflict-'));
+        tempDirs.push(tempDir);
+        const share = path.join(tempDir, 'share');
+        const vault = path.join(tempDir, 'vault');
+        await fs.mkdir(share);
+        await fs.mkdir(vault);
+        const mapper = new PathMapper();
+        mapper.update([makeMount(share)], 'test-device');
+        const onModify = vi.fn().mockResolvedValue(undefined);
+        const original = options.vaultPath === false ? {} : { getBasePath: () => vault };
+        const adapter = new VirtualAdapter(
+            original,
+            mapper,
+            new SecurityManager([share]),
+            false,
+            10 * 1024 * 1024,
+            async () => 'cancel',
+            async () => { },
+            () => false,
+            onModify,
+        );
+        // Obsidian's vault index: the modification time it last saw per path.
+        // Deliberately NOT updated by onModify, like a watcher that lags behind.
+        const known = new Map<string, number>();
+        if (options.hook !== false) adapter.getKnownMtime = p => known.get(p);
+        adapter.getConflictMode = () => options.mode ?? 'merge';
+        const onMergedSave = vi.fn();
+        adapter.onMergedSave = onMergedSave;
+        const real = (vaultPath: string) => path.join(share, vaultPath.replace(/^Mounted\//, ''));
+        const setMtime = async (vaultPath: string, offsetMs: number) => {
+            const when = new Date(Date.now() + offsetMs);
+            await fs.utimes(real(vaultPath), when, when);
+        };
+        return {
+            adapter, onModify, onMergedSave, real,
+            /** The file exists on the share (an older save) and Obsidian loads it. */
+            async open(vaultPath: string, content: string | Uint8Array) {
+                await fs.writeFile(real(vaultPath), content);
+                await setMtime(vaultPath, -60_000);
+                if (typeof content === 'string') await adapter.read(vaultPath);
+                known.set(vaultPath, (await fs.stat(real(vaultPath))).mtimeMs);
+            },
+            /** A colleague saves the file on the share; Obsidian hasn't noticed yet. */
+            async colleagueSaves(vaultPath: string, content: string | Uint8Array) {
+                await fs.writeFile(real(vaultPath), content);
+                await setMtime(vaultPath, -30_000);
+            },
+            async conflictCopies() {
+                const dir = path.join(vault, '.trash', 'folderbridge-conflicts');
+                const names = await fs.readdir(dir).catch(() => [] as string[]);
+                return Promise.all(names.map(async name => ({ name, content: await fs.readFile(path.join(dir, name)) })));
+            },
+        };
+    }
+
+    it('saves normally when the file on the drive is the one Obsidian knows', async () => {
+        const t = await setup({ mode: 'copy' });
+        await t.open(NOTE, 'v1');
+        await t.adapter.write(NOTE, 'v2');
+        expect(await fs.readFile(t.real(NOTE), 'utf8')).toBe('v2');
+        expect(await t.conflictCopies()).toEqual([]);
+        expect(t.onModify).toHaveBeenCalledWith(NOTE);
+    });
+
+    it('does not mistake its own previous save for a change by someone else', async () => {
+        const t = await setup({ mode: 'copy' });
+        await t.open(NOTE, 'v1');
+        // Two quick saves: Obsidian still has the mtime from before the first.
+        await t.adapter.write(NOTE, 'v2');
+        await t.adapter.write(NOTE, 'v3');
+        await t.adapter.writeBinary('Mounted/Budget.md', new TextEncoder().encode('v4').buffer);
+        await t.adapter.write(NOTE, 'v5');
+        expect(await fs.readFile(t.real(NOTE), 'utf8')).toBe('v5');
+        expect(await t.conflictCopies()).toEqual([]);
+    });
+
+    it('overwrites their change in overwrite mode', async () => {
+        const t = await setup({ mode: 'overwrite' });
+        await t.open(NOTE, 'v1');
+        await t.colleagueSaves(NOTE, 'theirs');
+        await t.adapter.write(NOTE, 'mine');
+        expect(await fs.readFile(t.real(NOTE), 'utf8')).toBe('mine');
+        expect(await t.conflictCopies()).toEqual([]);
+    });
+
+    it('keeps their version in the vault trash and saves mine in copy mode', async () => {
+        const t = await setup({ mode: 'copy' });
+        await t.open(NOTE, 'line 1\nline 2\n');
+        await t.colleagueSaves(NOTE, 'line 1\nline 2 (theirs)\n');
+        await t.adapter.write(NOTE, 'line 1 (mine)\nline 2\n');
+        expect(await fs.readFile(t.real(NOTE), 'utf8')).toBe('line 1 (mine)\nline 2\n');
+        const copies = await t.conflictCopies();
+        expect(copies).toHaveLength(1);
+        expect(copies[0].name).toMatch(/^Budget \(changed by someone else \d{4}-\d\d-\d\d \d\d\.\d\d\.\d\d\)\.md$/);
+        expect(copies[0].content.toString('utf8')).toBe('line 1\nline 2 (theirs)\n');
+        expect(t.onModify).toHaveBeenCalledWith(NOTE);
+        expect(t.onMergedSave).not.toHaveBeenCalled();
+        expect(notices).toEqual([expect.stringContaining(`Their version was kept as "${copies[0].name}"`)]);
+    });
+
+    it('refuses the save in copy mode when their version cannot be kept', async () => {
+        const t = await setup({ mode: 'copy', vaultPath: false });
+        await t.open(NOTE, 'v1');
+        await t.colleagueSaves(NOTE, 'theirs');
+        await expect(t.adapter.write(NOTE, 'mine')).rejects.toThrow(/could not be kept as a copy.*not saved/s);
+        expect(await fs.readFile(t.real(NOTE), 'utf8')).toBe('theirs');
+        expect(t.onModify).not.toHaveBeenCalled();
+        expect(notices).toEqual([]);
+    });
+
+    it('merges changes to different lines and asks the editor to reload', async () => {
+        const t = await setup({ mode: 'merge' });
+        await t.open(NOTE, 'title\n\nfirst\nsecond\nthird\n');
+        await t.colleagueSaves(NOTE, 'title\n\nfirst (theirs)\nsecond\nthird\n');
+        await t.adapter.write(NOTE, 'title\n\nfirst\nsecond\nthird (mine)\n');
+        expect(await fs.readFile(t.real(NOTE), 'utf8')).toBe('title\n\nfirst (theirs)\nsecond\nthird (mine)\n');
+        expect(await t.conflictCopies()).toEqual([]);
+        expect(t.onMergedSave).toHaveBeenCalledWith(NOTE);
+        expect(t.onModify).toHaveBeenCalledWith(NOTE);
+        expect(notices).toEqual([expect.stringContaining('Both sets of changes were merged')]);
+        // The editor saves again before Obsidian caught up: that is our merged file, not a new change.
+        await t.adapter.write(NOTE, 'title\n\nfirst (theirs)\nsecond\nthird (mine) more\n');
+        expect(await t.conflictCopies()).toEqual([]);
+        expect(t.onMergedSave).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps their version as a copy when both changed the same lines', async () => {
+        const t = await setup({ mode: 'merge' });
+        await t.open(NOTE, 'a\nb\nc\n');
+        await t.colleagueSaves(NOTE, 'a\nb (theirs)\nc\n');
+        await t.adapter.write(NOTE, 'a\nb (mine)\nc\n');
+        expect(await fs.readFile(t.real(NOTE), 'utf8')).toBe('a\nb (mine)\nc\n');
+        const copies = await t.conflictCopies();
+        expect(copies.map(c => c.content.toString('utf8'))).toEqual(['a\nb (theirs)\nc\n']);
+        expect(t.onMergedSave).not.toHaveBeenCalled();
+        expect(notices).toEqual([expect.stringContaining('could not be merged automatically')]);
+    });
+
+    it('never merges against a later read of their version', async () => {
+        const t = await setup({ mode: 'merge' });
+        await t.open(NOTE, 'a\nb\nc\n');
+        await t.colleagueSaves(NOTE, 'a (theirs)\nb\nc\n');
+        // Something (search, another plugin) reads the note before Obsidian noticed the change.
+        await t.adapter.read(NOTE);
+        await t.adapter.write(NOTE, 'a\nb\nc (mine)\n');
+        expect(await fs.readFile(t.real(NOTE), 'utf8')).toBe('a\nb\nc (mine)\n');
+        const copies = await t.conflictCopies();
+        expect(copies.map(c => c.content.toString('utf8'))).toEqual(['a (theirs)\nb\nc\n']);
+    });
+
+    it('keeps a copy of a binary file instead of merging', async () => {
+        const t = await setup({ mode: 'merge' });
+        const image = 'Mounted/chart.png';
+        await t.open(image, new Uint8Array([1, 2, 3]));
+        await t.colleagueSaves(image, new Uint8Array([4, 5, 6]));
+        await t.adapter.writeBinary(image, new Uint8Array([7, 8, 9]).buffer);
+        expect([...await fs.readFile(t.real(image))]).toEqual([7, 8, 9]);
+        const copies = await t.conflictCopies();
+        expect(copies).toHaveLength(1);
+        expect(copies[0].name).toMatch(/^chart \(changed by someone else .+\)\.png$/);
+        expect([...copies[0].content]).toEqual([4, 5, 6]);
+    });
+
+    it('makes no copy when only the modification time changed', async () => {
+        const t = await setup({ mode: 'copy' });
+        await t.open(NOTE, 'same');
+        await t.colleagueSaves(NOTE, 'same');
+        await t.adapter.write(NOTE, 'mine');
+        expect(await fs.readFile(t.real(NOTE), 'utf8')).toBe('mine');
+        expect(await t.conflictCopies()).toEqual([]);
+    });
+
+    it('lets process() update the current file without a conflict', async () => {
+        const t = await setup({ mode: 'copy' });
+        await t.open(NOTE, 'a\n');
+        await t.colleagueSaves(NOTE, 'a (theirs)\n');
+        await t.adapter.process(NOTE, text => text + 'b\n');
+        expect(await fs.readFile(t.real(NOTE), 'utf8')).toBe('a (theirs)\nb\n');
+        expect(await t.conflictCopies()).toEqual([]);
+    });
+
+    it('does nothing in dry-run mode', async () => {
+        const t = await setup({ mode: 'copy' });
+        await t.open(NOTE, 'v1');
+        await t.colleagueSaves(NOTE, 'theirs');
+        t.adapter.setDryRun(true);
+        await t.adapter.write(NOTE, 'mine');
+        expect(await fs.readFile(t.real(NOTE), 'utf8')).toBe('theirs');
+        expect(await t.conflictCopies()).toEqual([]);
+    });
+
+    it('keeps the previous behaviour when the plugin provides no vault lookup', async () => {
+        const t = await setup({ mode: 'copy', hook: false });
+        await t.open(NOTE, 'v1');
+        await t.colleagueSaves(NOTE, 'theirs');
+        await t.adapter.write(NOTE, 'mine');
+        expect(await fs.readFile(t.real(NOTE), 'utf8')).toBe('mine');
+        expect(await t.conflictCopies()).toEqual([]);
     });
 });

@@ -1,5 +1,5 @@
 import { App, DataAdapter, DataWriteOptions, FuzzySuggestModal, Plugin, PluginSettingTab, Setting, Notice, normalizePath, TAbstractFile, TFolder, TFile } from 'obsidian';
-import { FolderBridgeSettings, MountPoint, DEFAULT_SETTINGS } from './src/types';
+import { ConflictMode, FolderBridgeSettings, MountPoint, DEFAULT_SETTINGS } from './src/types';
 import { PathMapper } from './src/PathMapper';
 import { VirtualAdapter } from './src/VirtualAdapter';
 import { SecurityManager } from './src/SecurityManager';
@@ -1768,6 +1768,28 @@ export default class FolderBridgePlugin extends Plugin {
 	// Adapter installation
 	// ------------------------------------------------------------------
 
+	/**
+	 * After a save that merged in someone else's changes, tell Obsidian the
+	 * file changed so the open editor shows the merged text. While a file is
+	 * still saving, Obsidian keeps its cached text and the editor ignores the
+	 * change, so wait for the save to finish (up to about 6 seconds).
+	 */
+	private reloadAfterSave(normalizedPath: string, attempt = 0): void {
+		window.setTimeout(() => void (async () => {
+			if (!this.originalAdapter) return; // plugin unloaded
+			const file = this.app.vault.getAbstractFileByPath(normalizedPath);
+			if (!(file instanceof TFile)) return;
+			if ((file as TFile & { saving?: boolean }).saving && attempt < 40) {
+				this.reloadAfterSave(normalizedPath, attempt + 1);
+				return;
+			}
+			const vault = this.app.vault as typeof this.app.vault & VaultInternal;
+			if (typeof vault.onChange !== 'function') return;
+			const stat = await this.app.vault.adapter.stat(normalizedPath);
+			if (stat) await vault.onChange('modified', normalizedPath, null, stat);
+		})().catch(e => logger.debug('[Folder Bridge] reload after a merged save failed:', e)), 150);
+	}
+
 	private installVirtualAdapter(): void {
 		const vault = this.app.vault as typeof this.app.vault & VaultInternal;
 		this.originalAdapter = vault.adapter;
@@ -1878,6 +1900,17 @@ export default class FolderBridgePlugin extends Plugin {
 		this.virtualAdapter.getKnownMtime = (normalizedPath: string) => {
 			const file = this.app.vault.getAbstractFileByPath(normalizedPath);
 			return file instanceof TFile ? file.stat.mtime : undefined;
+		};
+		// A note on a local mount changed on the drive since Obsidian loaded it:
+		// merge, keep their version as a copy, or overwrite (see the setting).
+		this.virtualAdapter.getConflictMode = () => this.settings.conflictMode;
+		this.virtualAdapter.onMergedSave = (normalizedPath: string) => this.reloadAfterSave(normalizedPath);
+		this.virtualAdapter.isOpenInEditor = (normalizedPath: string) => {
+			let open = false;
+			this.app.workspace.iterateAllLeaves(leaf => {
+				if ((leaf.view as { file?: TFile | null }).file?.path === normalizedPath) open = true;
+			});
+			return open;
 		};
 
 		// Wrap with a Proxy so that any undocumented methods on the original
@@ -3016,6 +3049,9 @@ export default class FolderBridgePlugin extends Plugin {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
 		this.settings.managedTocSource = this.settings.managedTocSource ?? '';
 		this.settings.managedTocSourceFallback = this.settings.managedTocSourceFallback ?? '';
+		if (!(['merge', 'copy', 'overwrite'] as unknown[]).includes(this.settings.conflictMode)) {
+			this.settings.conflictMode = DEFAULT_SETTINGS.conflictMode;
+		}
 		this.settings.explorerExpansionState = {
 			...(this.settings.explorerExpansionState ?? {}),
 		};
@@ -3181,6 +3217,22 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 				.onChange((val: 'ask' | 'unmount' | 'delete') => {
 					void (async () => {
 						this.plugin.settings.mountRootDeletionBehavior = val;
+						await this.plugin.saveSettings();
+					})();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName('When a note changed on the drive while you edit it')
+			.setDesc('Applies to local and network folders when someone else saved the note after Obsidian loaded it. Merge combines both sets of changes. When both changed the same lines, their version is kept as a copy in the vault trash folder before yours is saved.')
+			.addDropdown(drop => drop
+				.addOption('merge', 'Merge both versions (recommended)')
+				.addOption('copy', 'Keep their version as a copy, save mine')
+				.addOption('overwrite', 'Save mine, discard theirs')
+				.setValue(this.plugin.settings.conflictMode)
+				.onChange((val: ConflictMode) => {
+					void (async () => {
+						this.plugin.settings.conflictMode = val;
 						await this.plugin.saveSettings();
 					})();
 				})
