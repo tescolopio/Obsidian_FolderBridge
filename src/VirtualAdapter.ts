@@ -55,6 +55,8 @@ export class VirtualAdapter {
 	private maxDataUriBytes: number;
 	/** Mount IDs that have already shown a read-only notice this session (one-time per mount). */
 	private readOnlyNoticedMounts: Set<string> = new Set();
+	/** Mount IDs that have already logged "no safety copy possible" this session (one-time per mount). */
+	private safetyCopyWarnedMounts: Set<string> = new Set();
 	/** Optional localhost HTTP server for streaming video/audio from local mounts. */
 	private fileServer: FileServer | null = null;
 	/**
@@ -640,6 +642,78 @@ export class VirtualAdapter {
 	// write / writeBinary / append / process
 	// ------------------------------------------------------------------
 
+	/**
+	 * Copy an existing, non-empty local file aside before it is overwritten.
+	 *
+	 * writeFile truncates the file before writing, so a dropped network
+	 * connection, a full disk or a crash mid-save (common on SMB shares) would
+	 * otherwise leave the note empty or cut short with the previous content gone.
+	 * The copy goes to `<vault>/.trash/folderbridge-saving/`: hidden from
+	 * Obsidian, and nothing extra is left on the shared drive.
+	 *
+	 * Best effort: returns null (and saves without a copy) for new or empty
+	 * files, when the vault folder is unknown, or when the copy fails.  Saving
+	 * without a copy is better than refusing to save.
+	 */
+	private async makeSafetyCopy(realPath: string, mount: MountPoint): Promise<string | null> {
+		try {
+			const current = await fs.promises.stat(realPath);
+			if (!current.isFile() || current.size === 0) return null;
+		} catch {
+			// A new file has nothing to lose; any other stat error will resurface from writeFile.
+			return null;
+		}
+		try {
+			const basePath = (this.orig() as DataAdapter & { getBasePath?(): string }).getBasePath?.();
+			if (!basePath) throw new Error('the vault folder could not be located');
+			const dir = path.join(basePath, '.trash', 'folderbridge-saving');
+			await fs.promises.mkdir(dir, { recursive: true });
+			// Readable and unique: "2026-01-31 14-05-09 k3x9qa note.md" (no colons, for Windows).
+			const stamp = new Date().toISOString().slice(0, 19).replace('T', ' ').replace(/:/g, '-');
+			const copy = path.join(dir, `${stamp} ${Math.random().toString(36).slice(2, 8)} ${path.basename(realPath)}`);
+			await fs.promises.copyFile(realPath, copy, fs.constants.COPYFILE_EXCL);
+			return copy;
+		} catch (e) {
+			if (!this.safetyCopyWarnedMounts.has(mount.id)) {
+				this.safetyCopyWarnedMounts.add(mount.id);
+				logger.warn(`[FolderBridge] No safety copy possible before saving files on "${mount.virtualPath}" (${(e as Error).message}); saving without one.`);
+			}
+			return null;
+		}
+	}
+
+	/**
+	 * Overwrite a local file in place, keeping a safety copy until the new
+	 * content is fully written.
+	 *
+	 * Writing in place (rather than to a temp file that is renamed over the
+	 * original) is deliberate: it keeps the file's identity, permissions/ACLs,
+	 * creation time and Windows alternate data streams on network shares, and
+	 * does not break colleagues' open handles.
+	 *
+	 * On failure the thrown message names where the previous version was kept.
+	 */
+	private async overwriteLocalFile(realPath: string, mount: MountPoint, data: string | Buffer, op: 'write' | 'writeBinary'): Promise<void> {
+		let copy: string | null = null;
+		try {
+			await fs.promises.mkdir(path.dirname(realPath), { recursive: true });
+			copy = await this.makeSafetyCopy(realPath, mount);
+			if (typeof data === 'string') await fs.promises.writeFile(realPath, data, 'utf8');
+			else await fs.promises.writeFile(realPath, data);
+		} catch (e) {
+			const kept = copy ? ` The previous version is kept at "${copy}".` : '';
+			const errorMsg = `Folder Bridge: ${translateFsError(e as NodeJS.ErrnoException, op)}${kept}`;
+			logger.error(`[FolderBridge] ${op} failed for "${realPath}":`, e, errorMsg);
+			throw new Error(errorMsg);
+		}
+		if (copy) {
+			await fs.promises.unlink(copy).catch(e => {
+				// Harmless: the save succeeded; the leftover copy just sits in the vault trash.
+				logger.debug(`[FolderBridge] Could not remove safety copy "${copy}":`, e);
+			});
+		}
+	}
+
 	async write(normalizedPath: string, data: string, options?: unknown): Promise<void> {
 		const mount = this.pathMapper.getMountForPath(normalizedPath);
 		if (mount) {
@@ -672,16 +746,9 @@ export class VirtualAdapter {
 			this.assertAllowed(realPath);
 			this.assertNotReserved(realPath);
 			if (this.dryRun) { logger.debug(`[FolderBridge DryRun] write → ${realPath}`); return; }
-			try {
-				await fs.promises.mkdir(path.dirname(realPath), { recursive: true });
-				await fs.promises.writeFile(realPath, data, 'utf8');
-				void this.onModify?.(normalizedPath).catch(() => { });
-				return;
-			} catch (e) {
-				const errorMsg = `Folder Bridge: ${translateFsError(e as NodeJS.ErrnoException, 'write')}`;
-				logger.error(`[FolderBridge] write failed for "${realPath}":`, e, errorMsg);
-				throw new Error(errorMsg);
-			}
+			await this.overwriteLocalFile(realPath, mount, data, 'write');
+			void this.onModify?.(normalizedPath).catch(() => { });
+			return;
 		}
 		return this.orig().write(normalizedPath, data, options as DataWriteOptions | undefined);
 	}
@@ -717,14 +784,9 @@ export class VirtualAdapter {
 			this.assertAllowed(realPath);
 			this.assertNotReserved(realPath);
 			if (this.dryRun) { logger.debug(`[FolderBridge DryRun] writeBinary → ${realPath}`); return; }
-			try {
-				await fs.promises.mkdir(path.dirname(realPath), { recursive: true });
-				await fs.promises.writeFile(realPath, Buffer.from(data));
-				void this.onModify?.(normalizedPath).catch(() => { });
-				return;
-			} catch (e) {
-				throw new Error(`Folder Bridge: ${translateFsError(e as NodeJS.ErrnoException, 'writeBinary')}`);
-			}
+			await this.overwriteLocalFile(realPath, mount, Buffer.from(data), 'writeBinary');
+			void this.onModify?.(normalizedPath).catch(() => { });
+			return;
 		}
 		return this.orig().writeBinary(normalizedPath, data, options as DataWriteOptions | undefined);
 	}
