@@ -280,6 +280,49 @@ describe('main fallback regressions', () => {
         expect(onChange.mock.calls.map(call => call[0])).toEqual(['modified', 'raw']);
     });
 
+    it.each([false, true])('keeps the indexed file object during a local note rename (watcher suppressed: %s)', async suppressed => {
+        const existing = { ...mount('docs'), watcherSuppressAllEvents: suppressed };
+        const { plugin, app, files } = await makePlugin([existing]);
+        const oldPath = 'docs/old.md';
+        const newPath = 'docs/new.md';
+        const file = Object.assign(new TFile(), { path: oldPath, setPath: (path: string) => { file.path = path; } });
+        files.set(oldPath, file);
+        files.set('docs', new TFolder());
+
+        const trigger = vi.fn();
+        const handler = runInNewContext(
+            `(${readFileSync(new URL('../docs/vault-onchange.txt', import.meta.url), 'utf8')})`,
+            { fM: TFile, mM: TFolder },
+        ) as (this: unknown, event: string, path: string, oldPath: string | null, stat: unknown) => void;
+        const vaultState = {
+            fileMap: { [oldPath]: file },
+            addChild: (child: TFile) => files.set(child.path, child),
+            removeChild: (child: TFile) => files.delete(child.path),
+            trigger,
+        };
+        const onChange = vi.fn((event: string, path: string, oldPath: string | null, stat: unknown) => {
+            handler.call(vaultState, event, path, oldPath, stat);
+            return Promise.resolve();
+        });
+        Object.assign(app.vault, { onChange });
+        vi.spyOn(fs, 'access').mockResolvedValue(undefined);
+        const rename = vi.spyOn(fs, 'rename').mockResolvedValue(undefined);
+        plugin.fileWatcher = new FileWatcher(app, plugin.pathMapper, () => false);
+        (plugin as unknown as { installVirtualAdapter(): void }).installVirtualAdapter();
+
+        rename.mockRejectedValueOnce(Object.assign(new Error('denied'), { code: 'EACCES' }));
+        await expect(app.vault.adapter.rename(oldPath, newPath)).rejects.toThrow();
+        expect(onChange).not.toHaveBeenCalled();
+
+        await app.vault.adapter.rename(oldPath, newPath);
+
+        expect(rename).toHaveBeenLastCalledWith('/primary/old.md', '/primary/new.md');
+        expect(onChange).toHaveBeenCalledExactlyOnceWith('renamed', newPath, oldPath, null);
+        expect(trigger).toHaveBeenCalledExactlyOnceWith('rename', file, oldPath);
+        expect(files.get(newPath)).toBe(file);
+        expect(files.has(oldPath)).toBe(false);
+    });
+
     it.each(['persisted-suppression', 'runtime-suppression', 'null-stat', 'failed-stat', 'unmounted', 'missing-handler'] as const)(
         'keeps adapter modification notifications best-effort for %s', async scenario => {
             const existing = { ...mount('docs'), watcherSuppressAllEvents: scenario === 'persisted-suppression' };

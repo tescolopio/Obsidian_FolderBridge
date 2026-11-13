@@ -21,6 +21,7 @@ export class FileWatcher {
     private isIgnored: (name: string, mount: MountPoint, mountRelativePath?: string) => boolean;
     private watchers: Map<string, Chokidar.FSWatcher> = new Map();
     private watcherTokens = new Map<string, symbol>();
+    private localRenamePaths = new Set<string>();
 
     /**
      * Chokidar loader — resolved lazily so Node.js fs/events are never loaded on
@@ -62,6 +63,21 @@ export class FileWatcher {
         this.app = app;
         this.pathMapper = pathMapper;
         this.isIgnored = isIgnored;
+    }
+
+    /** Ignore the watcher pair while the adapter publishes the matching rename. */
+    async withLocalRename(oldPath: string, newPath: string, moveAndNotify: () => Promise<void>): Promise<void> {
+        if (this.localRenamePaths.has(oldPath) || this.localRenamePaths.has(newPath)) {
+            throw new Error('Folder Bridge: A rename is already in progress for this path.');
+        }
+        this.localRenamePaths.add(oldPath);
+        this.localRenamePaths.add(newPath);
+        try {
+            await moveAndNotify();
+        } finally {
+            this.localRenamePaths.delete(oldPath);
+            this.localRenamePaths.delete(newPath);
+        }
     }
 
     private warnWatcherUnavailable(mount: MountPoint, error: unknown): void {
@@ -320,18 +336,23 @@ export class FileWatcher {
         }
 
         try {
-            const existsInVault = !!this.app.vault.getAbstractFileByPath(normalizedPath);
+            const created = eventType === 'file-created';
+            const removed = eventType === 'file-removed';
+            if ((created || removed) && this.localRenamePaths.has(normalizedPath)) return;
+            const existing = vault.getAbstractFileByPath(normalizedPath);
 
-            if (eventType === 'file-created' || eventType === 'folder-created') {
-                if (existsInVault) return; // Already known to Obsidian
-            } else if (eventType === 'file-removed' || eventType === 'folder-removed' || eventType === 'file-changed') {
-                if (!existsInVault) return; // Not known to Obsidian, nothing to remove/modify
+            if (created || eventType === 'folder-created') {
+                if (existing) return; // Already known to Obsidian
+            } else if (removed || eventType === 'folder-removed' || eventType === 'file-changed') {
+                if (!existing) return; // Not known to Obsidian, nothing to remove/modify
             }
 
             if (eventType === 'file-created' || eventType === 'file-changed') {
                 // Obsidian expects a stat object for created/modified files
                 const stat = await this.app.vault.adapter.stat(normalizedPath);
                 if (stat && isCurrent()) {
+                    // The adapter may have registered the destination while stat was pending.
+                    if (created && (this.localRenamePaths.has(normalizedPath) || vault.getAbstractFileByPath(normalizedPath))) return;
                     const obsidianEvent = eventType === 'file-changed' ? 'modified' : eventType;
                     await vault.onChange(obsidianEvent, normalizedPath, null, stat);
                 }
