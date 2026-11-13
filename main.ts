@@ -33,7 +33,7 @@ const path: typeof import('path') = loadOptionalNodeModule<typeof import('path')
 
 /** Vault properties not in the public API but stable across Obsidian versions. */
 type VaultInternal = {
-	onChange(event: string, path: string, prev: null, stat: { type: string; ctime: number; mtime: number; size: number } | null): Promise<void>;
+	onChange(event: string, path: string, prev: string | null, stat: { type: string; ctime: number; mtime: number; size: number } | null): Promise<void>;
 	adapter: DataAdapter;
 	getResourcePath?(file: TFile): string;
 	create?(path: string, data: string, options?: unknown): Promise<TFile | null>;
@@ -1880,6 +1880,22 @@ export default class FolderBridgePlugin extends Plugin {
 			return file instanceof TFile ? file.stat.mtime : undefined;
 		};
 		this.virtualAdapter.getConflictMode = () => this.settings.localConflictMode;
+		this.virtualAdapter.renameLocalNote = async (oldPath, newPath, move) => {
+			const source = vault.getAbstractFileByPath(oldPath);
+			const parent = vault.getAbstractFileByPath(newPath.slice(0, newPath.lastIndexOf('/')));
+			if (!(source instanceof TFile) || !(parent instanceof TFolder) ||
+				vault.getAbstractFileByPath(newPath) || typeof vault.onChange !== 'function' || !this.fileWatcher) {
+				await move();
+				return;
+			}
+
+			// FileManager records links against the existing TFile. Keep that
+			// object and update its path before returning from adapter.rename().
+			await this.fileWatcher.withLocalRename(oldPath, newPath, async () => {
+				await move();
+				await vault.onChange('renamed', newPath, oldPath, null);
+			});
+		};
 
 		// Wrap with a Proxy so that any undocumented methods on the original
 		// adapter (internal Obsidian APIs) still work transparently.

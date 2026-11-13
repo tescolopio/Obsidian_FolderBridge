@@ -85,6 +85,8 @@ export class VirtualAdapter {
 	 */
 	getKnownMtime?: (normalizedPath: string) => number | undefined;
 	getConflictMode?: () => LocalConflictMode;
+	/** Publish a native vault rename after an adapter-initiated local note move. */
+	renameLocalNote?: (oldPath: string, newPath: string, move: () => Promise<void>) => Promise<void>;
 	private observedContent = new Map<string, string>();
 	private localSaveQueues = new Map<string, Promise<void>>();
 	/**
@@ -1543,20 +1545,23 @@ export class VirtualAdapter {
 				);
 			}
 
+			const move = () => fs.promises.rename(srcReal, dstReal);
 			try {
-				await fs.promises.rename(srcReal, dstReal);
+				if (this.renameLocalNote && path.extname(normalizedPath).toLowerCase() === '.md' &&
+					path.extname(newNormalizedPath).toLowerCase() === '.md' &&
+					this.isVisibleMountFile(newNormalizedPath, dstMount)) {
+					await this.renameLocalNote(normalizedPath, newNormalizedPath, move);
+				} else {
+					await move();
+				}
 			} catch (e) {
 				const err = e as NodeJS.ErrnoException;
-				if (err.code === 'EXDEV') {
-					// Cross-device move (e.g. different drive letters on Windows):
-					// fall back to copy-then-delete so the operation succeeds transparently.
-					// Use fs.promises.cp so that both files and directories are handled.
-					await fs.promises.cp(srcReal, dstReal, { recursive: true });
-					await fs.promises.rm(srcReal, { recursive: true });
-					this.moveNonUtf8Flags(normalizedPath, newNormalizedPath);
-					return;
+				if (err.code !== 'EXDEV') {
+					throw new Error(`Folder Bridge: ${translateFsError(err, 'rename')}`);
 				}
-				throw new Error(`Folder Bridge: ${translateFsError(err, 'rename')}`);
+				// Preserve the watcher-based behavior for cross-device copy and delete.
+				await fs.promises.cp(srcReal, dstReal, { recursive: true });
+				await fs.promises.rm(srcReal, { recursive: true });
 			}
 			this.moveNonUtf8Flags(normalizedPath, newNormalizedPath);
 			return;

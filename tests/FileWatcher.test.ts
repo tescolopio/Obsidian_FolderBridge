@@ -576,6 +576,43 @@ describe('FileWatcher', () => {
             vi.useRealTimers();
         });
 
+        it('does not replace the renamed file with a watcher create event', async () => {
+            const { app, mockOnChange, mockGetAbstractFileByPath, mockStat } = makeApp();
+            const oldPath = 'mounts/docs/old.md';
+            const newPath = 'mounts/docs/new.md';
+            const file = {};
+            const index = new Map([[oldPath, file]]);
+            mockGetAbstractFileByPath.mockImplementation((...args: unknown[]) => index.get(args[0] as string));
+            let finishStat!: (value: object) => void;
+            mockStat.mockImplementationOnce(() => new Promise(resolve => { finishStat = resolve; }));
+            const watcher = new FileWatcher(app, makeMapper(mount), () => false);
+            try {
+                watcher.startWatching(mount);
+                const add = getPathCallback('add');
+                const unlink = getPathCallback('unlink');
+                // A create notification can already be awaiting stat when rename begins.
+                await add(`${mount.realPath}/new.md`);
+                await watcher.withLocalRename(oldPath, newPath, async () => {
+                    await unlink(`${mount.realPath}/old.md`);
+                    await add(`${mount.realPath}/new.md`);
+                    index.delete(oldPath);
+                    index.set(newPath, file);
+                });
+                finishStat({ size: 1, ctime: 0, mtime: 0 });
+                await Promise.resolve();
+                await unlink(`${mount.realPath}/old.md`);
+                await add(`${mount.realPath}/new.md`);
+                expect(mockOnChange).not.toHaveBeenCalled();
+
+                await add(`${mount.realPath}/unrelated.md`);
+                expect(mockOnChange).toHaveBeenCalledExactlyOnceWith(
+                    'file-created', 'mounts/docs/unrelated.md', null, expect.any(Object),
+                );
+            } finally {
+                watcher.stopAll();
+            }
+        });
+
         it('file-removed: calls vault.onChange without stat', async () => {
             const { app, mockOnChange, mockGetAbstractFileByPath } = makeApp();
             mockGetAbstractFileByPath.mockReturnValue({ path: 'mounts/docs/note.md' });
